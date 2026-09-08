@@ -1,11 +1,12 @@
 # nts1-mkii-lab
 
-Nine custom oscillators and effects for the **Korg NTS-1 digital kit mkII**,
+Sixteen custom oscillators and effects for the **Korg NTS-1 digital kit mkII**,
 built on Korg's [logue SDK](https://github.com/korginc/logue-sdk) v2.
 
-Six polyphonic instruments — a subtractive synth, electric pianos, drawbar
-organs, struck strings, blown flutes and plucked strings — plus a chorus, a
-distortion and a pitch-shifted reverb. All free, all GPLv3.
+Thirteen polyphonic instruments — a subtractive synth, electric pianos, drawbar
+organs, struck strings, blown flutes, plucked strings and the seven Casio PT-20
+presets — plus a chorus, a distortion and a pitch-shifted reverb. All free, all
+GPLv3.
 
 The bet this repo makes: the NTS-1 mkII's oscillator runtime is monophonic, but
 its note callbacks are not — so a unit can implement its own voices, envelopes
@@ -24,6 +25,29 @@ and filters and play chords. `poly8` does exactly that.
 | [`ensemble`](units/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
 | [`drive`](units/drive) | MOD FX | Distortion: soft saturation, biased fuzz, wavefolder, bitcrusher. The analogue-ish modes run at 2x oversampling with a halfband decimator. |
 | [`shimmer`](units/shimmer) | REVERB | Pitch-shifted reverb. A comb/allpass tank with an octave-up shifter in its feedback path, so the tail climbs away from the source. |
+
+### [`casio`](units/casio) — the seven PT-20 tones
+
+The Casio PT-20 (1983) is a divider synth: square waves mixed at fixed levels
+with a simple envelope, no filter sweep and no velocity. Its seven presets are
+here as seven separate oscillators, so each one is a slot of its own rather
+than a menu dive. They share [one engine](units/casio/pt20.h); each unit's
+`dsp.h` is three lines pinning a tone.
+
+| Unit | Slot | What it is |
+|---|---|---|
+| [`casio-piano`](units/casio) | OSC | Struck square that dies under a held key. |
+| [`casio-organ`](units/casio) | OSC | 8'/4'/2'/1' octaves off one divider, instant on and off. |
+| [`casio-violin`](units/casio) | OSC | The buzziest — narrow pulses and a deep vibrato. |
+| [`casio-flute`](units/casio) | OSC | Nearly the bare fundamental, rolled off hard. |
+| [`casio-horn`](units/casio) | OSC | Hollow, midrange, brassy. |
+| [`casio-fantasy`](units/casio) | OSC | The famous one — partials beating off the harmonic series. |
+| [`casio-mellow`](units/casio) | OSC | Dark and round, gently detuned. |
+
+Band-limited and polyphonic, which the original is not; `LOFI` puts the grit
+back and `VSEN` defaults to 0 because the PT-20's keyboard has no touch
+sensitivity. Full parameter list and starting points in
+[units/casio/README.md](units/casio).
 
 ## Install
 
@@ -86,11 +110,16 @@ units/<name>/
   unit.cc        SDK callback surface
   header.c       unit metadata + the 10 parameter descriptors
   config.mk      sources for the build
+units/casio/     a family: shared pt20.h engine, one subdirectory per tone
 tests/render.cc  offline harness: checks + WAV renders, builds with plain clang
 mk/nts1mkii.mk   points the stock SDK build at this repo's layout
 logue-sdk/       submodule, kept pristine
 docs/            platform deep dive, polyphony notes, workflow
 ```
+
+A unit is any directory under `units/` with a `config.mk`, at either depth. The
+build target flattens the path, so `units/casio/piano` is `make casio-piano`
+and cannot collide with the top-level `make piano`.
 
 The split between `dsp.h` (portable) and the SDK glue is the important part: it
 is what lets `make test` run the exact code that ships to the synth, on your

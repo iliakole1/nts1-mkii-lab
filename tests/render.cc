@@ -28,6 +28,15 @@
 #include "../units/shimmer/dsp.h"
 
 /*
+ * The seven Casio units each declare their own CasioEngine pinning one tone,
+ * so their dsp.h files cannot all be included here at once. They are three
+ * lines apiece; everything they pin lives in the shared engine, which is what
+ * these tests drive. `make lint` checks that each unit pins the tone its
+ * directory is named after.
+ */
+#include "../units/casio/pt20.h"
+
+/*
  * PluckEngine takes its delay-line storage from the caller so that the 24 KB
  * of lines land in .bss rather than being baked into the shipped ELF (see
  * units/pluck/osc.h). The generic checks below all call init() with no
@@ -1212,6 +1221,266 @@ void renderDemo() {
 
 }  // namespace
 
+
+// ---------------------------------------------------------------------------
+// Casio PT-20 tones. One engine, seven voice specs.
+
+static const char *const kCasioNames[Pt20Engine::kNumTones] = {
+    "PIANO", "ORGAN", "VIOLIN", "FLUTE", "HORN", "FANTASY", "MELLOW"};
+
+/* The tests want a bare divider tone: LOFI quantisation smears the bins. */
+static Pt20Engine makeCasio(int tone, bool clean = true) {
+  Pt20Engine e;
+  e.init(tone);
+  if (clean) e.setParam(Pt20Engine::P_LOFI, 0);
+  return e;
+}
+
+void testCasioTones() {
+  printf("\ncasio: tones\n");
+  const double f0 = dsp::noteToHz(69);  // A4
+
+  for (int tone = 0; tone < Pt20Engine::kNumTones; ++tone) {
+    Pt20Engine e = makeCasio(tone);
+    e.noteOn(69, 100);
+    auto buf = renderVoice(e, kSR / 2);
+
+    /*
+     * FANTASY is deliberately inharmonic — its partials sit a little off the
+     * series so they beat — so test the same way the preset instruments do:
+     * energy on the note's harmonic grid against the grid pushed 70 cents
+     * sharp, rather than a single-period pitch estimate.
+     */
+    const double detune = 1.0413;
+    double onGrid = 0.0, offGrid = 0.0;
+    for (int n = 1; n <= 12; ++n) {
+      const double hz = f0 * 0.5 * n;
+      if (hz > 0.45 * kSR) break;
+      onGrid += energyAt(buf, kSR / 16, 8192, hz);
+      offGrid += energyAt(buf, kSR / 16, 8192, hz * detune);
+    }
+
+    const Stats st = analyse(buf);
+    printf("  %-7s on-grid %.5f vs off-grid %.5f, peak %.3f, rms %.3f\n",
+           kCasioNames[tone], onGrid, offGrid, st.peak, st.rms);
+    check(onGrid > offGrid * 2.5, std::string("casio ") + kCasioNames[tone] + " is in tune");
+    check(st.finite && st.peak <= 1.0001f,
+          std::string("casio ") + kCasioNames[tone] + " stays in range");
+    check(st.rms > 0.01f, std::string("casio ") + kCasioNames[tone] + " actually sounds");
+  }
+}
+
+void testCasioTonesDiffer() {
+  printf("\ncasio: tones are distinguishable\n");
+  std::vector<Fingerprint> prints;
+  for (int tone = 0; tone < Pt20Engine::kNumTones; ++tone) {
+    Pt20Engine e = makeCasio(tone);
+    e.noteOn(60, 100);
+    auto buf = renderVoice(e, kSR * 3);
+    const Fingerprint f = fingerprint(buf, dsp::noteToHz(60));
+    printf("  %-7s centroid %5.0f Hz, %.2f s long, wobble %.2f\n", kCasioNames[tone],
+           f.centroidHz, f.lengthSec, f.wobble);
+    prints.push_back(f);
+  }
+
+  float minB = 1e9f, maxB = 0.f, minL = 1e9f, maxL = 0.f;
+  for (const Fingerprint &f : prints) {
+    minB = fminf(minB, f.centroidHz);
+    maxB = fmaxf(maxB, f.centroidHz);
+    minL = fminf(minL, f.lengthSec);
+    maxL = fmaxf(maxL, f.lengthSec);
+  }
+  printf("  spread: centroid x%.2f, length x%.2f\n", maxB / fmaxf(minB, 1.f),
+         maxL / fmaxf(minL, 0.01f));
+  check(maxB / fmaxf(minB, 1.f) > 1.8f, "casio tones span a range of brightness");
+  check(maxL / fmaxf(minL, 0.01f) > 3.0f, "casio tones span a range of note length");
+
+  /* Two units that sound the same are two wasted oscillator slots. */
+  bool duplicate = false;
+  for (size_t i = 0; i < prints.size(); ++i)
+    for (size_t j = i + 1; j < prints.size(); ++j) {
+      const float db = fabsf(prints[i].centroidHz - prints[j].centroidHz) /
+                       fmaxf(prints[i].centroidHz, 1.f);
+      const float dl = fabsf(prints[i].lengthSec - prints[j].lengthSec) /
+                       fmaxf(prints[i].lengthSec, 0.01f);
+      const float dw = fabsf(prints[i].wobble - prints[j].wobble);
+      if (db < 0.06f && dl < 0.12f && dw < 0.06f) {
+        printf("  %s and %s are too alike\n", kCasioNames[i], kCasioNames[j]);
+        duplicate = true;
+      }
+    }
+  check(!duplicate, "casio has no duplicate-sounding tones");
+}
+
+void testCasioArticulation() {
+  printf("\ncasio: articulation\n");
+
+  /* ATK and REL add on top of the voice; zero must mean exactly the voice. */
+  for (int tone = 0; tone < Pt20Engine::kNumTones; ++tone) {
+    Pt20Engine plain = makeCasio(tone);
+    Pt20Engine zeroed = makeCasio(tone);
+    zeroed.setParam(Pt20Engine::P_ATTACK, 0);
+    zeroed.setParam(Pt20Engine::P_RELEASE, 0);
+    plain.noteOn(60, 100);
+    zeroed.noteOn(60, 100);
+    auto a = renderVoice(plain, kSR / 2);
+    auto b = renderVoice(zeroed, kSR / 2);
+    float maxDiff = 0.f;
+    for (size_t i = 0; i < a.size(); ++i) maxDiff = fmaxf(maxDiff, fabsf(a[i] - b[i]));
+    check(maxDiff < 1e-6f,
+          std::string("casio ") + kCasioNames[tone] + " leaves the voice alone at zero");
+  }
+
+  /* Stretching the attack has to actually delay the onset. */
+  auto onsetMs = [](int32_t atk) {
+    Pt20Engine e = makeCasio(Pt20Engine::kOrgan);
+    e.setParam(Pt20Engine::P_ATTACK, atk);
+    e.noteOn(60, 100);
+    auto buf = renderVoice(e, kSR);
+    float peak = 0.f;
+    for (float v : buf) peak = fmaxf(peak, fabsf(v));
+    for (size_t i = 0; i < buf.size(); ++i)
+      if (fabsf(buf[i]) > peak * 0.5f) return static_cast<float>(i) * 1000.f / kSR;
+    return 1000.f;
+  };
+  const float fast = onsetMs(0), slow = onsetMs(1023);
+  printf("  organ onset: %.1f ms at ATK 0, %.1f ms at ATK max\n", fast, slow);
+  check(slow > fast * 5.f, "casio ATK stretches the attack");
+
+  /* And stretching the release has to leave a longer tail. */
+  auto tailRms = [](int32_t rel) {
+    Pt20Engine e = makeCasio(Pt20Engine::kOrgan);
+    e.setParam(Pt20Engine::P_RELEASE, rel);
+    e.noteOn(60, 100);
+    renderVoice(e, kSR / 3);
+    e.noteOff(60);
+    renderVoice(e, kSR / 2);
+    return analyse(renderVoice(e, kSR / 4)).rms;
+  };
+  const float shortTail = tailRms(0), longTail = tailRms(1023);
+  printf("  tail after note off: %.5f at REL 0, %.5f at REL max\n", shortTail, longTail);
+  check(longTail > shortTail * 5.f, "casio REL stretches the release");
+}
+
+void testCasioBehaviour() {
+  printf("\ncasio: behaviour\n");
+
+  /* The PT-20 keyboard has no touch sensitivity, so VSEN defaults to 0. */
+  {
+    Pt20Engine soft = makeCasio(Pt20Engine::kOrgan);
+    Pt20Engine hard = makeCasio(Pt20Engine::kOrgan);
+    soft.noteOn(60, 20);
+    hard.noteOn(60, 127);
+    const float sr = analyse(renderVoice(soft, kSR / 4)).rms;
+    const float hr = analyse(renderVoice(hard, kSR / 4)).rms;
+    printf("  velocity 20 vs 127 at VSEN 0: rms %.4f vs %.4f\n", sr, hr);
+    check(fabsf(sr - hr) < 1e-6f, "casio ignores velocity by default, as the PT-20 did");
+
+    Pt20Engine s2 = makeCasio(Pt20Engine::kOrgan);
+    Pt20Engine h2 = makeCasio(Pt20Engine::kOrgan);
+    s2.setParam(Pt20Engine::P_VELO, 100);
+    h2.setParam(Pt20Engine::P_VELO, 100);
+    s2.noteOn(60, 20);
+    h2.noteOn(60, 127);
+    const float sr2 = analyse(renderVoice(s2, kSR / 4)).rms;
+    const float hr2 = analyse(renderVoice(h2, kSR / 4)).rms;
+    printf("  the same at VSEN 100: rms %.4f vs %.4f\n", sr2, hr2);
+    check(hr2 > sr2 * 3.f, "casio VSEN turns velocity back on");
+  }
+
+  /* OCT must transpose by whole octaves, not something close to one. */
+  {
+    auto gridEnergy = [](int32_t oct, double hz) {
+      Pt20Engine e = makeCasio(Pt20Engine::kFlute);
+      e.setParam(Pt20Engine::P_OCTAVE, oct);
+      e.noteOn(69, 100);  // A4 = 440
+      auto buf = renderVoice(e, kSR / 2);
+      return energyAt(buf, kSR / 16, 8192, hz);
+    };
+    const double up = gridEnergy(1, 880.0), upWrong = gridEnergy(1, 440.0);
+    const double dn = gridEnergy(-1, 220.0), dnWrong = gridEnergy(-1, 440.0);
+    printf("  OCT +1: 880 Hz %.5f vs 440 Hz %.5f\n", up, upWrong);
+    printf("  OCT -1: 220 Hz %.5f vs 440 Hz %.5f\n", dn, dnWrong);
+    check(up > upWrong * 3.0, "casio OCT +1 sounds an octave up");
+    check(dn > dnWrong * 3.0, "casio OCT -1 sounds an octave down");
+  }
+
+  /* Voice allocation, stealing, and handing voices back. */
+  {
+    Pt20Engine e = makeCasio(Pt20Engine::kOrgan);
+    for (int n = 0; n < 6; ++n) e.noteOn(static_cast<uint8_t>(48 + n * 2), 100);
+    renderVoice(e, kBlock * 4);
+    check(e.activeVoices() == 6, "casio 6 held notes light up 6 voices");
+
+    for (int n = 0; n < 4; ++n) e.noteOn(static_cast<uint8_t>(72 + n), 100);
+    auto stolen = renderVoice(e, kSR / 4);
+    check(analyse(stolen).finite, "casio over-allocating stays finite");
+    check(e.activeVoices() == 6, "casio voice count stays capped at 6");
+
+    e.allNoteOff();
+    renderVoice(e, kSR);
+    check(e.activeVoices() == 0, "casio returns every voice to the pool");
+  }
+
+  /* PIANO has no sustain: a held key must die and free its voice. */
+  {
+    Pt20Engine e = makeCasio(Pt20Engine::kPiano);
+    e.noteOn(60, 100);
+    const float early = analyse(renderVoice(e, kSR / 4)).rms;
+    renderVoice(e, kSR * 4);
+    const float late = analyse(renderVoice(e, kSR / 4)).rms;
+    printf("  piano held: rms %.4f early, %.4f after 4 s\n", early, late);
+    check(late < early * 0.05f, "casio PIANO decays under a held key");
+    check(e.activeVoices() == 0, "casio PIANO returns the voice to the pool");
+  }
+
+  /* Nothing held means digital silence, not a drifting DC offset. */
+  {
+    Pt20Engine e = makeCasio(Pt20Engine::kFantasy, false);
+    auto buf = renderVoice(e, kSR / 10);
+    check(analyse(buf).peak == 0.f, "casio is silent with no notes held");
+  }
+
+  /* The lo-fi stage has to be audible — it is the whole point of the LOFI knob. */
+  {
+    Pt20Engine clean = makeCasio(Pt20Engine::kOrgan);
+    Pt20Engine crushed = makeCasio(Pt20Engine::kOrgan, false);
+    crushed.setParam(Pt20Engine::P_LOFI, 100);
+    clean.noteOn(60, 100);
+    crushed.noteOn(60, 100);
+    auto a = renderVoice(clean, kSR / 2);
+    auto b = renderVoice(crushed, kSR / 2);
+    float diff = 0.f;
+    for (size_t i = 0; i < a.size(); ++i) diff = fmaxf(diff, fabsf(a[i] - b[i]));
+    printf("  LOFI 0 vs 100 max sample difference: %.4f\n", diff);
+    check(diff > 0.02f, "casio LOFI changes the sound");
+    check(analyse(b).finite, "casio LOFI stays finite");
+  }
+}
+
+void renderCasioDemo() {
+  printf("\ncasio demo\n");
+  const uint8_t chords[4][3] = {{60, 64, 67}, {57, 60, 64}, {53, 57, 60}, {55, 59, 62}};
+
+  std::vector<float> mono;
+  for (int tone = 0; tone < Pt20Engine::kNumTones; ++tone) {
+    Pt20Engine e;
+    e.init(tone);
+    for (int c = 0; c < 2; ++c) {
+      for (int n = 0; n < 3; ++n) e.noteOn(chords[c][n], 100);
+      auto held = renderVoice(e, kSR * 3 / 4);
+      mono.insert(mono.end(), held.begin(), held.end());
+      for (int n = 0; n < 3; ++n) e.noteOff(chords[c][n]);
+      auto gap = renderVoice(e, kSR / 2);
+      mono.insert(mono.end(), gap.begin(), gap.end());
+    }
+  }
+  const Stats s = analyse(mono);
+  printf("  casio demo: peak %.3f  rms %.3f\n", s.peak, s.rms);
+  check(s.finite && s.peak <= 1.0001f, "casio demo stays in range");
+  writeWav("dist/test/casio.wav", mono, 1);
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -1223,9 +1492,14 @@ int main() {
   testOrgan();
   testShimmer();
   testDrive();
+  testCasioTones();
+  testCasioTonesDiffer();
+  testCasioArticulation();
+  testCasioBehaviour();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();
+  renderCasioDemo();
   printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILURES", g_failures,
          g_failures == 1 ? "" : "s");
   return g_failures == 0 ? 0 : 1;

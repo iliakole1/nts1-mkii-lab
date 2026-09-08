@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the parameter descriptors in every units/*/header.c.
+"""Validate the parameter descriptors in every unit header.c.
 
 The device rejects a unit outright ("wrong unit min max or center") if a
 descriptor is inconsistent, and nothing in the C build catches it. Rules, per
@@ -70,14 +70,55 @@ def lint(path):
     return errors
 
 
+def lint_casio_pins(root):
+    """Each Casio unit must pin the tone its directory is named after.
+
+    The seven units share one engine and differ only in the enum they hand to
+    init(). Nothing catches a copy-paste slip there: a horn/dsp.h that says
+    kFlute compiles, links, loads, and quietly ships a second flute.
+    """
+    errors = []
+    pattern = os.path.join(root, "units", "casio", "*", "dsp.h")
+    pins = {}
+    for path in sorted(glob.glob(pattern)):
+        name = os.path.basename(os.path.dirname(path))
+        with open(path) as f:
+            source = f.read()
+        found = re.search(r"Pt20Engine::init\(Pt20Engine::(k\w+)\)", source)
+        if not found:
+            errors.append(f"casio/{name}: no Pt20Engine::init(Pt20Engine::k...) call")
+            continue
+        pinned = found.group(1)
+        expected = "k" + name.capitalize()
+        if pinned != expected:
+            errors.append(f"casio/{name}: pins {pinned}, expected {expected}")
+        if pinned in pins:
+            errors.append(f"casio/{name}: pins {pinned}, already used by casio/{pins[pinned]}")
+        pins[pinned] = name
+    return errors
+
+
 def main():
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-    headers = sorted(glob.glob(os.path.join(root, "units", "*", "header.c")))
+    headers = sorted(
+        glob.glob(os.path.join(root, "units", "*", "header.c"))
+        + glob.glob(os.path.join(root, "units", "*", "*", "header.c"))
+    )
     if not headers:
         print("no unit headers found")
         return 1
 
     failed = 0
+
+    casio_errors = lint_casio_pins(root)
+    if casio_errors:
+        failed += 1
+        print("  [FAIL] units/casio/*/dsp.h tone pinning")
+        for e in casio_errors:
+            print(f"         {e}")
+    elif glob.glob(os.path.join(root, "units", "casio", "*", "dsp.h")):
+        print("  [PASS] units/casio/*/dsp.h tone pinning")
+
     for path in headers:
         rel = os.path.relpath(path, root)
         errors = lint(path)

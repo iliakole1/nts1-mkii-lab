@@ -46,6 +46,10 @@ build):
 | `ensemble` | modfx | 5.7 KB | 0.4 KB | — |
 | `drive` | modfx | 5.9 KB | 0.4 KB | — |
 | `shimmer` | revfx | 7.4 KB | 0.7 KB | — |
+| `casio-*` | osc | 15.0 KB | 1.1 KB | — |
+
+The seven `casio-*` units are identical in size: they share one engine and
+differ only in the tone constant each pins.
 
 **`text` + `data` is what counts against the budget; `bss` is free.** Only
 `data` ships bytes in the ELF, so a large buffer must be zero-initialised and
