@@ -47,3 +47,17 @@ install: | $(INSTALLDIR)
 
 $(INSTALLDIR):
 	@mkdir -p $@
+
+##############################################################################
+# Header dependency tracking.
+#
+# The SDK's compile rules list only the source file and the Makefile as
+# prerequisites, so editing a dsp.h — or anything in common/ — does not trigger
+# a rebuild. You get a stale binary and no warning that it is stale. -MMD makes
+# the compiler drop a .d file beside each object; -MP adds phony targets for
+# the headers so renaming or deleting one does not wedge the build.
+#
+CFLAGS   += -MMD -MP
+CXXFLAGS += -MMD -MP
+
+-include $(OBJS:.o=.d)
