@@ -37,6 +37,24 @@
 #include "../units/casio/pt20.h"
 #include "../units/dx/dsp.h"
 #include "../units/cz/dsp.h"
+#include "../units/wt/dsp.h"
+
+/*
+ * WtEngine takes its wave bank from the caller so the 16 KB lands in .bss
+ * rather than being baked into the shipped ELF. The bank is deterministic and
+ * read-only, so every engine here can share one.
+ */
+struct WtHarness : WtEngine {
+  void init() {
+    static int8_t table[WtEngine::kBufferSize];
+    static bool built = false;
+    if (!built) {
+      WtEngine::buildTable(table);
+      built = true;
+    }
+    WtEngine::init(table);
+  }
+};
 
 /*
  * PluckEngine takes its delay-line storage from the caller so that the 24 KB
@@ -1899,6 +1917,225 @@ void renderCzDemo() {
   writeWav("dist/test/cz.wav", mono, 1);
 }
 
+
+// ---------------------------------------------------------------------------
+// wt — wavetable scanning.
+
+void testWt() {
+  printf("\nwt: the wave bank\n");
+  {
+    static int8_t table[WtEngine::kBufferSize];
+    WtEngine::buildTable(table);
+
+    /* Every wave, at every band-limited level, must be present and normalised.
+     * A level quieter than its neighbour puts a step in loudness exactly where
+     * the note crosses from one to the other. */
+    int silent = 0, unnormalised = 0;
+    for (int w = 0; w < WtEngine::kWaves; ++w)
+      for (int l = 0; l < WtEngine::kLevels; ++l) {
+        int peak = 0;
+        for (int i = 0; i < WtEngine::kLen; ++i) {
+          const int v = table[(w * WtEngine::kLevels + l) * WtEngine::kLen + i];
+          peak = std::max(peak, v < 0 ? -v : v);
+        }
+        if (peak < 8) ++silent;
+        if (peak < 120) ++unnormalised;
+      }
+    printf("  %d waves x %d levels: %d silent, %d under-normalised\n", WtEngine::kWaves,
+           WtEngine::kLevels, silent, unnormalised);
+    check(silent == 0, "wt every wave and level has signal in it");
+    check(unnormalised == 0, "wt every wave and level is normalised");
+
+    /* The bank has to be a progression, not a list: neighbours differ a
+     * little, the ends differ a lot. Scanning a table of near-duplicates is
+     * the failure mode that still passes every other check. */
+    float maxNeighbour = 0.f;
+    for (int w = 0; w + 1 < WtEngine::kWaves; ++w) {
+      float d = 0.f;
+      for (int i = 0; i < WtEngine::kLen; ++i) {
+        const int a = table[(w * WtEngine::kLevels) * WtEngine::kLen + i];
+        const int b = table[((w + 1) * WtEngine::kLevels) * WtEngine::kLen + i];
+        d = fmaxf(d, fabsf(static_cast<float>(a - b)));
+      }
+      maxNeighbour = fmaxf(maxNeighbour, d);
+    }
+    float ends = 0.f;
+    for (int i = 0; i < WtEngine::kLen; ++i) {
+      const int a = table[i];
+      const int b = table[((WtEngine::kWaves - 1) * WtEngine::kLevels) * WtEngine::kLen + i];
+      ends = fmaxf(ends, fabsf(static_cast<float>(a - b)));
+    }
+    printf("  largest step between neighbours %.0f, first vs last %.0f (of 254)\n",
+           maxNeighbour, ends);
+    check(ends > 60.f, "wt the ends of the bank are far apart");
+    check(maxNeighbour < 200.f, "wt the bank is a progression, not a list of jumps");
+  }
+
+  printf("\nwt: tuning\n");
+  {
+    auto pitch = [](uint8_t note) {
+      WtHarness e;
+      e.init();
+      e.setParam(WtEngine::P_DETUNE, 0);
+      e.setParam(WtEngine::P_SWEEP, 0);
+      e.setParam(WtEngine::P_WAVE, 400);
+      e.setParam(WtEngine::P_CUTOFF, 1023);
+      e.setParam(WtEngine::P_SUSTAIN, 100);
+      e.setParam(WtEngine::P_EGFILTER, 0);
+      e.noteOn(note, 100);
+      auto buf = renderVoice(e, kSR / 2);
+      return estimateHz(buf, kSR / 8, kSR / 8);
+    };
+    const float a4 = pitch(69), a1 = pitch(33);
+    printf("  A4 %.2f Hz, A1 %.2f Hz\n", a4, a1);
+    check(fabsf(a4 - 440.f) < 2.f, "wt A4 renders at 440 Hz +/- 2");
+    check(fabsf(a1 - 55.f) < 1.f, "wt A1 renders at 55 Hz +/- 1");
+  }
+
+  printf("\nwt: scanning\n");
+  {
+    /* Moving the pointer has to change the timbre, and the far end of the bank
+     * has to be brighter than the near end. */
+    auto centroid = [](int32_t wave) {
+      WtHarness e;
+      e.init();
+      e.setParam(WtEngine::P_WAVE, wave);
+      e.setParam(WtEngine::P_SWEEP, 0);
+      e.setParam(WtEngine::P_CUTOFF, 1023);
+      e.setParam(WtEngine::P_EGFILTER, 0);
+      e.setParam(WtEngine::P_SUSTAIN, 100);
+      e.noteOn(60, 100);
+      auto buf = renderVoice(e, kSR / 2);
+      return fingerprint(buf, dsp::noteToHz(60)).centroidHz;
+    };
+    const float low = centroid(0), mid = centroid(512), high = centroid(1023);
+    printf("  centroid across the bank: %.0f / %.0f / %.0f Hz\n", low, mid, high);
+    check(high > low * 2.f, "wt scanning the bank changes the timbre");
+    check(mid > low, "wt the bank gets brighter as it is scanned");
+
+    /*
+     * SWEP walks the pointer while the note sounds. Driven by the envelope, so
+     * it needs one that actually moves: a fast attack into a long decay to
+     * zero sustain sweeps the pointer up and walks it back down. Both windows
+     * are taken after the attack has landed — measuring one inside a slow
+     * attack compares against near-silence, whose centroid is zero, and the
+     * test passes without having established anything.
+     */
+    WtHarness e;
+    e.init();
+    e.setParam(WtEngine::P_WAVE, 0);
+    e.setParam(WtEngine::P_SWEEP, 100);
+    e.setParam(WtEngine::P_CUTOFF, 1023);
+    e.setParam(WtEngine::P_EGFILTER, 0);
+    e.setParam(WtEngine::P_ATTACK, 8);
+    e.setParam(WtEngine::P_DECAY, 2500);
+    e.setParam(WtEngine::P_SUSTAIN, 0);
+    e.noteOn(60, 100);
+    renderVoice(e, kSR / 40);  // let the attack land
+    /* A quarter second each: the centroid is averaged over 8192-sample windows
+     * starting a twentieth of a second in, so anything shorter measures
+     * nothing and silently reports zero. */
+    auto head = renderVoice(e, kSR / 4);
+    renderVoice(e, kSR);
+    auto tail = renderVoice(e, kSR / 4);
+    const float c0 = fingerprint(head, dsp::noteToHz(60)).centroidHz;
+    const float c1 = fingerprint(tail, dsp::noteToHz(60)).centroidHz;
+    printf("  one note with SWEP 100: %.0f Hz early, %.0f Hz late\n", c0, c1);
+    check(c0 > 50.f, "wt the swept note has signal in both windows");
+    check(c0 > c1 * 1.3f, "wt SWEP walks the pointer back as the envelope falls");
+  }
+
+  printf("\nwt: band limiting\n");
+  {
+    /*
+     * The reason each wave is stored four times. Every harmonic is already in
+     * the table, so there is no depth to clamp the way FM or phase distortion
+     * allows — the note has to pick a copy that fits. Folded partials land off
+     * the harmonic grid, so measure on-grid against the grid 70 cents sharp.
+     */
+    auto offGrid = [](uint8_t note) {
+      WtHarness e;
+      e.init();
+      e.setParam(WtEngine::P_WAVE, 1023);
+      e.setParam(WtEngine::P_SWEEP, 0);
+      e.setParam(WtEngine::P_CUTOFF, 1023);
+      e.setParam(WtEngine::P_EGFILTER, 0);
+      e.setParam(WtEngine::P_DETUNE, 0);
+      e.setParam(WtEngine::P_SUSTAIN, 100);
+      e.noteOn(note, 110);
+      auto buf = renderVoice(e, kSR / 2);
+      const double f0 = dsp::noteToHz(note);
+      double on = 0.0, off = 0.0;
+      for (int n = 1; n <= 40; ++n) {
+        const double hz = f0 * n;
+        if (hz > 0.45 * kSR) break;
+        on += energyAt(buf, kSR / 16, 8192, hz);
+        off += energyAt(buf, kSR / 16, 8192, hz * 1.0413);
+      }
+      return static_cast<float>(off / fmax(on, 1e-9));
+    };
+    const float low = offGrid(36), mid = offGrid(72), high = offGrid(103);
+    printf("  off-grid share: %.4f at C2, %.4f at C5, %.4f at G7\n", low, mid, high);
+    check(low < 0.25f, "wt stays on the harmonic grid low down");
+    check(mid < 0.25f, "wt stays on the harmonic grid in the middle");
+    check(high < 0.25f, "wt stays on the harmonic grid at the top of the keyboard");
+  }
+
+  printf("\nwt: voices\n");
+  {
+    WtHarness e;
+    e.init();
+    for (int n = 0; n < 6; ++n) e.noteOn(static_cast<uint8_t>(48 + n * 2), 100);
+    renderVoice(e, kBlock * 8);
+    check(e.activeVoices() == 6, "wt 6 held notes light up 6 voices");
+
+    for (int n = 0; n < 4; ++n) e.noteOn(static_cast<uint8_t>(72 + n), 100);
+    auto stolen = renderVoice(e, kSR / 4);
+    check(analyse(stolen).finite, "wt over-allocating stays finite");
+    check(e.activeVoices() == 6, "wt voice count stays capped at 6");
+
+    e.allNoteOff();
+    renderVoice(e, kSR * 2);
+    check(e.activeVoices() == 0, "wt returns every voice to the pool");
+  }
+
+  {
+    WtHarness e;
+    e.init();
+    auto buf = renderVoice(e, kSR / 10);
+    check(analyse(buf).peak == 0.f, "wt is silent with no notes held");
+  }
+}
+
+void renderWtDemo() {
+  printf("\nwt demo\n");
+  const uint8_t chords[4][3] = {{60, 64, 67}, {57, 60, 64}, {53, 57, 60}, {55, 59, 62}};
+  const int32_t sweeps[4] = {0, 60, -80, 100};
+
+  std::vector<float> mono;
+  for (int s = 0; s < 4; ++s) {
+    WtHarness e;
+    e.init();
+    e.setParam(WtEngine::P_WAVE, s == 2 ? 900 : 120);
+    e.setParam(WtEngine::P_SWEEP, sweeps[s]);
+    e.setParam(WtEngine::P_ATTACK, s == 3 ? 300 : 8);
+    e.setParam(WtEngine::P_DECAY, 1200);
+    e.setParam(WtEngine::P_SUSTAIN, 60);
+    for (int c = 0; c < 2; ++c) {
+      for (int n = 0; n < 3; ++n) e.noteOn(chords[c][n], static_cast<uint8_t>(105 - n * 10));
+      auto held = renderVoice(e, kSR * 3 / 4);
+      mono.insert(mono.end(), held.begin(), held.end());
+      for (int n = 0; n < 3; ++n) e.noteOff(chords[c][n]);
+      auto gap = renderVoice(e, kSR / 2);
+      mono.insert(mono.end(), gap.begin(), gap.end());
+    }
+  }
+  const Stats st = analyse(mono);
+  printf("  wt demo: peak %.3f  rms %.3f\n", st.peak, st.rms);
+  check(st.finite && st.peak <= 1.0001f, "wt demo stays in range");
+  writeWav("dist/test/wt.wav", mono, 1);
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -1916,12 +2153,14 @@ int main() {
   testCasioBehaviour();
   testDx();
   testCz();
+  testWt();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();
   renderCasioDemo();
   renderDxDemo();
   renderCzDemo();
+  renderWtDemo();
   printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILURES", g_failures,
          g_failures == 1 ? "" : "s");
   return g_failures == 0 ? 0 : 1;

@@ -1,12 +1,12 @@
 # nts1-mkii-lab
 
-Eighteen custom oscillators and effects for the **Korg NTS-1 digital kit
+Nineteen custom oscillators and effects for the **Korg NTS-1 digital kit
 mkII**, built on Korg's [logue SDK](https://github.com/korginc/logue-sdk) v2.
 
-Fifteen polyphonic instruments — a subtractive synth, electric pianos, drawbar
+Sixteen polyphonic instruments — a subtractive synth, electric pianos, drawbar
 organs, struck strings, blown flutes, plucked strings, six-operator FM, phase
-distortion and the seven Casio PT-20 presets — plus a chorus, a distortion and
-a pitch-shifted reverb. All free, all GPLv3.
+distortion, wavetable scanning and the seven Casio PT-20 presets — plus a
+chorus, a distortion and a pitch-shifted reverb. All free, all GPLv3.
 
 The bet this repo makes: the NTS-1 mkII's oscillator runtime is monophonic, but
 its note callbacks are not — so a unit can implement its own voices, envelopes
@@ -22,6 +22,7 @@ and filters and play chords. `poly8` does exactly that.
 | [`piano`](units/piano) | OSC | Five struck-string presets — grand, bright, mellow, honky-tonk, toy. Additive, with stiff-string inharmonicity, per-partial decay and unison beating. |
 | [`flute`](units/flute) | OSC | Five breath-blown presets: flute, ocarina, pan flute, recorder, piccolo. Chiff, breath noise, and vibrato that arrives after the attack. |
 | [`pluck`](units/pluck) | OSC | Six Karplus-Strong string presets: banjo, guitar, ukulele, mandolin, harp, koto. Pick brightness, pick position and body resonance separate them. |
+| [`wt`](units/wt) | OSC | Wavetable scanning, shown as `WAVE`. 32 waves generated at load, band-limited four ways so the top of the keyboard does not tear, with the envelope walking the pointer through the bank. |
 | [`cz`](units/cz) | OSC | Phase distortion, shown as `PD8`. Eight presets — a resonant filter sweep on a synth with no filter, the way the Casio CZ line did it. Cheapest oscillator here. |
 | [`dx`](units/dx) | OSC | Six-operator FM, shown as `FM6`. Eight presets — bells, marimba, vibes, bass, brass, strings, harpsichord, clavinet. Per-patch routing, operator feedback, and sidebands capped so the top of the keyboard does not fold. |
 | [`ensemble`](units/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
