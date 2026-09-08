@@ -1,5 +1,5 @@
 /*
- *  flute/unit.cc — logue-sdk callback surface.
+ *  dx/unit.cc — logue-sdk callback surface.
  *
  *  Thin: every callback forwards into the Osc adapter. Keep DSP out of here.
  */
@@ -54,7 +54,7 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value) {
 __unit_callback int32_t unit_get_param_value(uint8_t id) {
   /* Report the engine's live preset rather than the cache, so the display
    * cannot drift out of step with what is actually loaded. */
-  if (id == FluteEngine::P_PRESET) return s_osc.currentPreset();
+  if (id == DxEngine::P_PRESET) return s_osc.currentPreset();
   return s_cached[id];
 }
 

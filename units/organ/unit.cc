@@ -1,5 +1,5 @@
 /*
- *  poly8/unit.cc — logue-sdk callback surface.
+ *  organ/unit.cc — logue-sdk callback surface.
  *
  *  Thin: every callback forwards into the Osc adapter. Keep DSP out of here.
  */

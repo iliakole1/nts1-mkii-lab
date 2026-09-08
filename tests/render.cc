@@ -35,6 +35,7 @@
  * directory is named after.
  */
 #include "../units/casio/pt20.h"
+#include "../units/dx/dsp.h"
 
 /*
  * PluckEngine takes its delay-line storage from the caller so that the 24 KB
@@ -418,14 +419,25 @@ Fingerprint fingerprint(const std::vector<float> &x, float f0) {
   for (size_t i = 0; i < env.size(); ++i) peak = fmaxf(peak, env[i]);
 
   /*
-   * Time from the note starting until it first falls 20 dB under its peak, or
-   * the whole buffer if it never does. Measuring from the peak block instead
-   * looks reasonable and is not: on a dead-flat organ note the peak block is
-   * wherever the last bit of numerical noise landed, often near the end, and
-   * the "length" then reports whatever buffer was left after it.
+   * Time from the note speaking until it first falls 20 dB under its peak, or
+   * the whole buffer if it never does.
+   *
+   * Two things this must not do. Measuring from the peak block looks reasonable
+   * and is not: on a dead-flat organ note the peak block is wherever the last
+   * bit of numerical noise landed, often near the end, and the "length" then
+   * reports whatever buffer was left after it. Measuring from block 1 is worse
+   * for the opposite reason: anything with a slow attack is still under 10 % of
+   * its eventual peak 10 ms in, and reports a length of one block. So find the
+   * onset — the first block at half the peak — and scan forward from there.
    */
+  size_t onset = 0;
+  for (size_t i = 0; i < env.size(); ++i)
+    if (env[i] >= peak * 0.5f) {
+      onset = i;
+      break;
+    }
   f.lengthSec = static_cast<float>(env.size()) * 0.01f;
-  for (size_t i = 1; i < env.size(); ++i)
+  for (size_t i = onset + 1; i < env.size(); ++i)
     if (env[i] < peak * 0.1f) {
       f.lengthSec = static_cast<float>(i) * 0.01f;
       break;
@@ -1481,6 +1493,178 @@ void renderCasioDemo() {
   writeWav("dist/test/casio.wav", mono, 1);
 }
 
+
+// ---------------------------------------------------------------------------
+// dx — six-operator FM.
+
+static const char *const kDxNames[DxEngine::kNumPresets] = {
+    "BELL", "MRMB", "VIBE", "BASS", "BRAS", "STRG", "HPSI", "CLAV"};
+
+void testDx() {
+  checkPresetsInTune<DxEngine>("dx", kDxNames, DxEngine::kNumPresets);
+  checkPresetsDiffer<DxEngine>("dx", kDxNames, DxEngine::kNumPresets, 1.8f, 2.5f);
+  checkDecays<DxEngine>("dx", DxEngine::kMarimba);
+  checkEnvelopeStretch<DxEngine>("dx", DxEngine::kBell);
+
+  printf("\ndx: operators\n");
+
+  /* TONE scales every modulator, which on an FM voice is the brightness. */
+  {
+    auto centroid = [](int32_t tone) {
+      DxEngine e;
+      e.init();
+      e.setParam(DxEngine::P_PRESET, DxEngine::kHarpsi);
+      e.setParam(DxEngine::P_TONE, tone);
+      e.noteOn(60, 100);
+      auto buf = renderVoice(e, kSR / 2);
+      return fingerprint(buf, dsp::noteToHz(60)).centroidHz;
+    };
+    const float dark = centroid(0), bright = centroid(1023);
+    printf("  HPSI centroid: %.0f Hz at TONE 0, %.0f Hz at TONE max\n", dark, bright);
+    check(bright > dark * 1.5f, "dx TONE opens the modulators");
+  }
+
+  /* TONE at zero must leave sines: no modulator, no sidebands. */
+  {
+    DxEngine e;
+    e.init();
+    e.setParam(DxEngine::P_PRESET, DxEngine::kBrass);
+    e.setParam(DxEngine::P_TONE, 0);
+    e.setParam(DxEngine::P_FEEDBACK, 0);
+    e.noteOn(69, 100);
+    auto buf = renderVoice(e, kSR / 2);
+    const double f0 = dsp::noteToHz(69);
+    const double fund = energyAt(buf, kSR / 16, 8192, f0);
+    double upper = 0.0;
+    for (int n = 3; n <= 8; ++n) upper += energyAt(buf, kSR / 16, 8192, f0 * n);
+    printf("  BRAS at TONE 0: fundamental %.5f, harmonics 3-8 %.5f\n", fund, upper);
+    check(fund > upper * 8.0, "dx collapses to sines at TONE 0");
+  }
+
+  /* Feedback is what makes the bass and clav reedy rather than hollow. */
+  {
+    auto render = [](int32_t fb) {
+      DxEngine e;
+      e.init();
+      e.setParam(DxEngine::P_PRESET, DxEngine::kBass);
+      e.setParam(DxEngine::P_FEEDBACK, fb);
+      e.noteOn(40, 100);
+      return renderVoice(e, kSR / 2);
+    };
+    auto none = render(0);
+    auto lots = render(100);
+    float diff = 0.f;
+    for (size_t i = 0; i < none.size(); ++i) diff = fmaxf(diff, fabsf(none[i] - lots[i]));
+    const float b0 = fingerprint(none, dsp::noteToHz(40)).centroidHz;
+    const float b1 = fingerprint(lots, dsp::noteToHz(40)).centroidHz;
+    printf("  BASS centroid %.0f Hz at FDBK 0, %.0f Hz at FDBK 100 (max diff %.3f)\n",
+           b0, b1, diff);
+    check(diff > 0.02f, "dx FDBK changes the sound");
+    check(b1 > b0, "dx FDBK adds harmonics");
+    check(analyse(lots).finite, "dx FDBK at maximum stays finite");
+  }
+
+  /*
+   * The top of the keyboard. FM sidebands are unbounded, so a bright patch up
+   * high folds them back — the modulator cap and the per-operator key scaling
+   * exist to stop that. Measured as spectral spread: the same patch must be
+   * rich low and much tamer high, and never louder up there.
+   */
+  {
+    auto spread = [](uint8_t note) {
+      DxEngine e;
+      e.init();
+      e.setParam(DxEngine::P_PRESET, DxEngine::kBell);
+      e.setParam(DxEngine::P_TONE, 1023);
+      e.noteOn(note, 127);
+      auto buf = renderVoice(e, kSR / 2);
+      const double f0 = dsp::noteToHz(note);
+      const double fund = energyAt(buf, kSR / 16, 8192, f0);
+      double away = 0.0;
+      /* Deliberately off the harmonic grid: only folding puts energy here. */
+      for (int n = 1; n <= 10; ++n) away += energyAt(buf, kSR / 16, 8192, f0 * (n + 0.37));
+      return std::make_pair(static_cast<float>(away / fmax(fund, 1e-9)),
+                            analyse(buf).peak);
+    };
+    const auto low = spread(48);
+    const auto high = spread(108);
+    printf("  BELL off-grid energy: %.3f at C3, %.3f at C8 (peaks %.3f / %.3f)\n",
+           low.first, high.first, low.second, high.second);
+    check(high.first < low.first, "dx tames the sidebands at the top of the keyboard");
+    check(high.second <= low.second * 1.5f, "dx does not gain level up the keyboard");
+    check(high.second <= 1.0001f, "dx stays in range at the top of the keyboard");
+  }
+
+  printf("\ndx: voices\n");
+  {
+    DxEngine e;
+    e.init();
+    e.setParam(DxEngine::P_PRESET, DxEngine::kStrings);
+    for (int n = 0; n < 6; ++n) e.noteOn(static_cast<uint8_t>(48 + n * 2), 100);
+    renderVoice(e, kBlock * 8);
+    check(e.activeVoices() == 6, "dx 6 held notes light up 6 voices");
+
+    for (int n = 0; n < 4; ++n) e.noteOn(static_cast<uint8_t>(72 + n), 100);
+    auto stolen = renderVoice(e, kSR / 4);
+    check(analyse(stolen).finite, "dx over-allocating stays finite");
+    check(e.activeVoices() == 6, "dx voice count stays capped at 6");
+
+    e.allNoteOff();
+    renderVoice(e, kSR * 2);
+    check(e.activeVoices() == 0, "dx returns every voice to the pool");
+  }
+
+  /* The percussive patches end on their own with the key still down. */
+  {
+    for (int preset : {DxEngine::kMarimba, DxEngine::kHarpsi, DxEngine::kBell}) {
+      DxEngine e;
+      e.init();
+      e.setParam(DxEngine::P_PRESET, preset);
+      e.noteOn(60, 110);
+      const float early = analyse(renderVoice(e, kSR / 8)).rms;
+      renderVoice(e, kSR * 6);
+      const float late = analyse(renderVoice(e, kSR / 8)).rms;
+      printf("  %s held: rms %.4f early, %.4f after 6 s\n", kDxNames[preset], early, late);
+      check(late < early * 0.05f,
+            std::string("dx ") + kDxNames[preset] + " decays under a held key");
+      check(e.activeVoices() == 0,
+            std::string("dx ") + kDxNames[preset] + " returns the voice to the pool");
+    }
+  }
+
+  {
+    DxEngine e;
+    e.init();
+    auto buf = renderVoice(e, kSR / 10);
+    check(analyse(buf).peak == 0.f, "dx is silent with no notes held");
+  }
+}
+
+void renderDxDemo() {
+  printf("\ndx demo\n");
+  const uint8_t chords[4][3] = {{60, 64, 67}, {57, 60, 64}, {53, 57, 60}, {55, 59, 62}};
+
+  std::vector<float> mono;
+  for (int preset = 0; preset < DxEngine::kNumPresets; ++preset) {
+    DxEngine e;
+    e.init();
+    e.setParam(DxEngine::P_PRESET, preset);
+    for (int c = 0; c < 2; ++c) {
+      for (int n = 0; n < 3; ++n)
+        e.noteOn(chords[c][n], static_cast<uint8_t>(105 - n * 10));
+      auto held = renderVoice(e, kSR * 3 / 4);
+      mono.insert(mono.end(), held.begin(), held.end());
+      for (int n = 0; n < 3; ++n) e.noteOff(chords[c][n]);
+      auto gap = renderVoice(e, kSR / 2);
+      mono.insert(mono.end(), gap.begin(), gap.end());
+    }
+  }
+  const Stats s = analyse(mono);
+  printf("  dx demo: peak %.3f  rms %.3f\n", s.peak, s.rms);
+  check(s.finite && s.peak <= 1.0001f, "dx demo stays in range");
+  writeWav("dist/test/dx.wav", mono, 1);
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -1496,10 +1680,12 @@ int main() {
   testCasioTonesDiffer();
   testCasioArticulation();
   testCasioBehaviour();
+  testDx();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();
   renderCasioDemo();
+  renderDxDemo();
   printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILURES", g_failures,
          g_failures == 1 ? "" : "s");
   return g_failures == 0 ? 0 : 1;
