@@ -64,7 +64,7 @@ control only). It is after the sum, so it cannot articulate individual notes.
 
 ## Voice allocation, concretely
 
-`units/poly8/dsp.h` is a working reference. The shape of it:
+`units/osc/poly8/dsp.h` is a working reference. The shape of it:
 
 ```cpp
 void noteOn(uint8_t note, uint8_t velo) {
@@ -122,7 +122,7 @@ follow:
 
 If you need more headroom, drop the second oscillator per voice before you
 drop voices — detune is cheaper as a chorus effect after the sum (that is what
-`units/ensemble` is for).
+`units/modfx/ensemble` is for).
 
 The real ceiling is the 48 KB unit size, not the CPU. Wavetables, long
 lookup tables, and per-voice delay lines are what will actually stop you, and

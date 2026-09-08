@@ -29,7 +29,7 @@ when in doubt — it is what Korg tests against.
 
 ```bash
 make test          # host build of the DSP + WAV renders, ~2 s
-make               # cross-build every unit into dist/
+make               # cross-build every unit into dist/<module>/
 make poly8         # just one unit
 make clean
 ```
@@ -47,7 +47,7 @@ The SDK ships a WebAudio sandbox. It needs emscripten:
 ```bash
 cd logue-sdk && git submodule update --init tools/emsdk
 cd tools/emsdk && ./emsdk install latest && ./emsdk activate latest
-cd ../../../units/poly8 && make wasm
+cd ../../../units/osc/poly8 && make wasm
 ```
 
 `make wasm` builds the unit to WebAssembly and serves a page with knobs. Every
@@ -66,9 +66,10 @@ straight from the SDK will not compile here until it is renamed.
 1. Connect the NTS-1 mkII over USB and leave it powered on.
 2. Open **KORG KONTROL Editor** (free, Mac/Windows — see the
    [editor page](https://www.korg.com/us/products/synthesizers/nts_1_mk2/editor.php)).
-3. Drag `dist/poly8.nts1mkiiunit` onto a row of the **oscillator** user unit
-   list, or use *File → Import User Unit…*. Effects go into the mod/delay/reverb
-   lists by type.
+3. Drag `dist/osc/poly8.nts1mkiiunit` onto a row of the **oscillator** user
+   unit list, or use *File → Import User Unit…*. The folder a unit built into
+   is the list it belongs on: `dist/osc/`, `dist/modfx/`, `dist/delfx/`,
+   `dist/revfx/`.
 4. On the device the unit appears at the end of the OSC (or FX) selection list.
 
 Do not unplug or power off while the editor is transferring.

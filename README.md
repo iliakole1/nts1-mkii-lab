@@ -17,44 +17,44 @@ and filters and play chords. `poly8` does exactly that.
 
 | Unit | Slot | What it is |
 |---|---|---|
-| [`poly8`](units/poly8) | OSC | 8-voice polyphonic synth. Two detuned polyBLEP oscillators per voice (saw → square → narrow pulse), per-voice state variable lowpass and ADSR, envelope-to-filter amount, voice stealing. |
-| [`epiano`](units/epiano) | OSC | Four electric pianos — ballad Rhodes, Wurlitzer, bright tine, barking reed — from 2-op FM with a velocity-scaled strike. Global tremolo and preamp. |
-| [`organ`](units/organ) | OSC | Six drawbar organs: jazz, rock, Vox, Farfisa, church pipe, theatre tibia. Nine drawbars off one phasor, single-trigger percussion, key click, tremulant. |
-| [`piano`](units/piano) | OSC | Five struck-string presets — grand, bright, mellow, honky-tonk, toy. Additive, with stiff-string inharmonicity, per-partial decay and unison beating. |
-| [`flute`](units/flute) | OSC | Five breath-blown presets: flute, ocarina, pan flute, recorder, piccolo. Chiff, breath noise, and vibrato that arrives after the attack. |
-| [`pluck`](units/pluck) | OSC | Six Karplus-Strong string presets: banjo, guitar, ukulele, mandolin, harp, koto. Pick brightness, pick position and body resonance separate them. |
-| [`wt`](units/wt) | OSC | Wavetable scanning, shown as `WAVE`. 32 waves generated at load, band-limited four ways so the top of the keyboard does not tear, with the envelope walking the pointer through the bank. |
-| [`cz`](units/cz) | OSC | Phase distortion, shown as `PD8`. Eight presets — a resonant filter sweep on a synth with no filter, the way the Casio CZ line did it. Cheapest oscillator here. |
-| [`dx`](units/dx) | OSC | Six-operator FM, shown as `FM6`. Eight presets — bells, marimba, vibes, bass, brass, strings, harpsichord, clavinet. Per-patch routing, operator feedback, and sidebands capped so the top of the keyboard does not fold. |
-| [`ensemble`](units/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
-| [`micro`](units/micro) | MOD FX | Micro pitch shifting. Two shifters a few cents apart, one per side — width with nothing moving, so there is no sweep to get tired of. |
-| [`drive`](units/drive) | MOD FX | Distortion: soft saturation, biased fuzz, wavefolder, bitcrusher. The analogue-ish modes run at 2x oversampling with a halfband decimator. |
-| [`bbd`](units/bbd) | DEL FX | Bucket-brigade delay. Time is clock rate and clock rate is bandwidth, so a long setting is dark because it cannot be anything else. Compander, tape-ish wobble, tempo sync. |
-| [`reso`](units/reso) | DEL FX | Four tuned string resonators — a delay line short enough to be a pitch. Play a drum loop through a minor seventh. |
-| [`shimmer`](units/shimmer) | REVERB | Pitch-shifted reverb. A comb/allpass tank with an octave-up shifter in its feedback path, so the tail climbs away from the source. |
+| [`poly8`](units/osc/poly8) | OSC | 8-voice polyphonic synth. Two detuned polyBLEP oscillators per voice (saw → square → narrow pulse), per-voice state variable lowpass and ADSR, envelope-to-filter amount, voice stealing. |
+| [`epiano`](units/osc/epiano) | OSC | Four electric pianos — ballad Rhodes, Wurlitzer, bright tine, barking reed — from 2-op FM with a velocity-scaled strike. Global tremolo and preamp. |
+| [`organ`](units/osc/organ) | OSC | Six drawbar organs: jazz, rock, Vox, Farfisa, church pipe, theatre tibia. Nine drawbars off one phasor, single-trigger percussion, key click, tremulant. |
+| [`piano`](units/osc/piano) | OSC | Five struck-string presets — grand, bright, mellow, honky-tonk, toy. Additive, with stiff-string inharmonicity, per-partial decay and unison beating. |
+| [`flute`](units/osc/flute) | OSC | Five breath-blown presets: flute, ocarina, pan flute, recorder, piccolo. Chiff, breath noise, and vibrato that arrives after the attack. |
+| [`pluck`](units/osc/pluck) | OSC | Six Karplus-Strong string presets: banjo, guitar, ukulele, mandolin, harp, koto. Pick brightness, pick position and body resonance separate them. |
+| [`wt`](units/osc/wt) | OSC | Wavetable scanning, shown as `WAVE`. 32 waves generated at load, band-limited four ways so the top of the keyboard does not tear, with the envelope walking the pointer through the bank. |
+| [`cz`](units/osc/cz) | OSC | Phase distortion, shown as `PD8`. Eight presets — a resonant filter sweep on a synth with no filter, the way the Casio CZ line did it. Cheapest oscillator here. |
+| [`dx`](units/osc/dx) | OSC | Six-operator FM, shown as `FM6`. Eight presets — bells, marimba, vibes, bass, brass, strings, harpsichord, clavinet. Per-patch routing, operator feedback, and sidebands capped so the top of the keyboard does not fold. |
+| [`ensemble`](units/modfx/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
+| [`micro`](units/modfx/micro) | MOD FX | Micro pitch shifting. Two shifters a few cents apart, one per side — width with nothing moving, so there is no sweep to get tired of. |
+| [`drive`](units/modfx/drive) | MOD FX | Distortion: soft saturation, biased fuzz, wavefolder, bitcrusher. The analogue-ish modes run at 2x oversampling with a halfband decimator. |
+| [`bbd`](units/delfx/bbd) | DEL FX | Bucket-brigade delay. Time is clock rate and clock rate is bandwidth, so a long setting is dark because it cannot be anything else. Compander, tape-ish wobble, tempo sync. |
+| [`reso`](units/delfx/reso) | DEL FX | Four tuned string resonators — a delay line short enough to be a pitch. Play a drum loop through a minor seventh. |
+| [`shimmer`](units/revfx/shimmer) | REVERB | Pitch-shifted reverb. A comb/allpass tank with an octave-up shifter in its feedback path, so the tail climbs away from the source. |
 
-### [`casio`](units/casio) — the seven PT-20 tones
+### [`casio`](units/osc/casio) — the seven PT-20 tones
 
 The Casio PT-20 (1983) is a divider synth: square waves mixed at fixed levels
 with a simple envelope, no filter sweep and no velocity. Its seven presets are
 here as seven separate oscillators, so each one is a slot of its own rather
-than a menu dive. They share [one engine](units/casio/pt20.h); each unit's
+than a menu dive. They share [one engine](units/osc/casio/pt20.h); each unit's
 `dsp.h` is three lines pinning a tone.
 
 | Unit | Slot | What it is |
 |---|---|---|
-| [`casio-piano`](units/casio) | OSC | Struck square that dies under a held key. |
-| [`casio-organ`](units/casio) | OSC | 8'/4'/2'/1' octaves off one divider, instant on and off. |
-| [`casio-violin`](units/casio) | OSC | The buzziest — narrow pulses and a deep vibrato. |
-| [`casio-flute`](units/casio) | OSC | Nearly the bare fundamental, rolled off hard. |
-| [`casio-horn`](units/casio) | OSC | Hollow, midrange, brassy. |
-| [`casio-fantasy`](units/casio) | OSC | The famous one — partials beating off the harmonic series. |
-| [`casio-mellow`](units/casio) | OSC | Dark and round, gently detuned. |
+| [`casio-piano`](units/osc/casio) | OSC | Struck square that dies under a held key. |
+| [`casio-organ`](units/osc/casio) | OSC | 8'/4'/2'/1' octaves off one divider, instant on and off. |
+| [`casio-violin`](units/osc/casio) | OSC | The buzziest — narrow pulses and a deep vibrato. |
+| [`casio-flute`](units/osc/casio) | OSC | Nearly the bare fundamental, rolled off hard. |
+| [`casio-horn`](units/osc/casio) | OSC | Hollow, midrange, brassy. |
+| [`casio-fantasy`](units/osc/casio) | OSC | The famous one — partials beating off the harmonic series. |
+| [`casio-mellow`](units/osc/casio) | OSC | Dark and round, gently detuned. |
 
 Band-limited and polyphonic, which the original is not; `LOFI` puts the grit
 back and `VSEN` defaults to 0 because the PT-20's keyboard has no touch
 sensitivity. Full parameter list and starting points in
-[units/casio/README.md](units/casio).
+[units/osc/casio/README.md](units/osc/casio).
 
 ## Install
 
@@ -64,8 +64,9 @@ You do not need to build anything. Grab the units from the
 1. Connect the NTS-1 mkII over USB and leave it powered on.
 2. Open [KORG KONTROL Editor](https://www.korg.com/us/products/synthesizers/nts_1_mk2/editor.php)
    (free, Mac/Windows).
-3. Drag each `.nts1mkiiunit` onto the matching user-unit list — oscillators to
-   OSC, `ensemble` and `drive` to MOD FX, `shimmer` to REVERB.
+3. Drag each `.nts1mkiiunit` onto the matching user-unit list. **The folder is
+   the list**: everything in `osc/` goes on the oscillator list, `modfx/` on
+   MOD FX, `delfx/` on DELAY, `revfx/` on REVERB.
 
 The unit then appears at the end of that list on the device. Don't unplug while
 the editor is transferring. Longer version, including what to do when something
@@ -100,7 +101,7 @@ Both are explained in [docs/polyphony.md](docs/polyphony.md).
 ```bash
 ./scripts/setup.sh    # SDK submodule, CMSIS, ARM toolchain
 make test             # host-side DSP tests + demo WAVs in dist/test
-make                  # cross-build every unit into dist/
+make                  # cross-build every unit into dist/<module>/
 ```
 
 `setup.sh` pulls about 1.3 GB of toolchain and CMSIS headers. `make test` needs
@@ -110,24 +111,30 @@ seconds, which is where most of the work happens.
 ## Layout
 
 ```
-common/          portable DSP building blocks (BLEP osc, SVF, ADSR, operator EG,
-                 pitch shifter, LFO, helpers)
-units/<name>/
-  dsp.h          the engine — portable C++, zero SDK includes
-  osc.h|modfx.h|revfx.h  logue-sdk Processor adapter
-  unit.cc        SDK callback surface
-  header.c       unit metadata + the 10 parameter descriptors
-  config.mk      sources for the build
-units/casio/     a family: shared pt20.h engine, one subdirectory per tone
-tests/render.cc  offline harness: checks + WAV renders, builds with plain clang
-mk/nts1mkii.mk   points the stock SDK build at this repo's layout
-logue-sdk/       submodule, kept pristine
-docs/            platform deep dive, polyphony notes, workflow
+common/               portable DSP building blocks (BLEP osc, SVF, ADSR,
+                      operator EG, pitch shifter, LFO, helpers)
+units/<module>/<name>/
+  dsp.h               the engine — portable C++, zero SDK includes
+  osc.h|modfx.h|delfx.h|revfx.h   logue-sdk Processor adapter
+  unit.cc             SDK callback surface
+  header.c            unit metadata + the parameter descriptors
+  config.mk           sources for the build
+units/osc/casio/      a family: shared pt20.h engine, one subdirectory per tone
+tests/render.cc       offline harness: checks + WAV renders, plain clang
+mk/nts1mkii.mk        points the stock SDK build at this repo's layout
+dist/<module>/        built units, sorted into the list they belong on
+logue-sdk/            submodule, kept pristine
+docs/                 platform deep dive, polyphony notes, workflow
 ```
 
-A unit is any directory under `units/` with a `config.mk`, at either depth. The
-build target flattens the path, so `units/casio/piano` is `make casio-piano`
-and cannot collide with the top-level `make piano`.
+Units live under the module they target, which is also where they build to —
+`units/osc/poly8` produces `dist/osc/poly8.nts1mkiiunit`, so the folder always
+tells you which user-unit list a file belongs on.
+
+A unit is any directory under `units/` holding a `config.mk`. The build target
+is its `PROJECT`, so `make poly8` produces `poly8.nts1mkiiunit` and the two
+always match — including for a family, where `units/osc/casio/piano` is
+`make casio-piano` and cannot collide with the top-level `make piano`.
 
 The split between `dsp.h` (portable) and the SDK glue is the important part: it
 is what lets `make test` run the exact code that ships to the synth, on your
@@ -144,13 +151,15 @@ laptop, in two seconds.
 
 ## Adding a unit
 
-Copy an existing unit directory, then:
+Copy an existing unit directory into `units/<module>/`, then:
 
-1. `config.mk` — set `PROJECT` and `PROJECT_TYPE` (`osc`/`modfx`/`delfx`/`revfx`)
+1. `config.mk` — set `PROJECT` and `PROJECT_TYPE` (`osc`/`modfx`/`delfx`/`revfx`).
+   `PROJECT_TYPE` has to match the folder: it picks the SDK template, the
+   websim shell, and where the unit installs to.
 2. `header.c` — set `name`, a unique `unit_id`, the module in `.target`, and the parameters
 3. `dsp.h` — write the engine
-4. `osc.h` / `modfx.h` / `revfx.h` — the adapter class, named `Osc`, `ModFx` or
-   `RevFx`; `wasm.cc` refers to it by that name
+4. `osc.h` / `modfx.h` / `delfx.h` / `revfx.h` — the adapter class, named `Osc`,
+   `ModFx`, `DelFx` or `RevFx`; `unit.cc` and `wasm.cc` refer to it by that name
 5. Add a case to `tests/render.cc` so it is covered before it ever reaches hardware
 
 Four rules the hardware enforces and the compiler does not: no logue-sdk

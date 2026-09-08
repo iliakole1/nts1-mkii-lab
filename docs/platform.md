@@ -29,7 +29,7 @@ itself. That is why the build links with `-shared --entry=0 -nostartfiles`.
 "Max unit size" is the whole stripped ELF: code, constants, and static data.
 Big wavetables do not fit in an oscillator — there is no SDRAM on the `osc`
 runtime, which is why `Processor::getBufferSize()` returns 0 in
-`units/poly8/osc.h`. Effects get SDRAM through `desc->hooks.sdram_alloc()`,
+`units/osc/poly8/osc.h`. Effects get SDRAM through `desc->hooks.sdram_alloc()`,
 called once from `unit_init()`.
 
 Where the units in this repo currently sit (`make` prints these on every
@@ -64,7 +64,7 @@ which one non-zero member anywhere inside is enough to prevent. `pluck` learned
 this the hard way: its 24 KB of Karplus-Strong delay lines started as a member
 of an engine that also had non-zero defaults, so the whole object was emitted
 as `.data` and the unit shipped 24 KB of zeros — 41 KB of its ~48 KB budget for
-a 15 KB program. Handing the storage in from a static in `units/pluck/osc.h`
+a 15 KB program. Handing the storage in from a static in `units/osc/pluck/osc.h`
 moved it to `.bss` and cut the shipped unit to 17 KB. Check with
 `arm-none-eabi-size` when a unit is unexpectedly large.
 
@@ -136,7 +136,7 @@ On the mkII, parameters 0 and 1 are wired to the A and B knobs, where the
 7-segment display shows a bare value — a `k_unit_param_type_strings` parameter
 there does not show its name. Put a copy of the control in the EDIT menu if the
 name matters, and have `unit_get_param_value` report the engine's live value for
-both copies so they cannot disagree. `units/piano` does this.
+both copies so they cannot disagree. `units/osc/piano` does this.
 
 Knob parameters are conventionally `0..1023`. Nothing enforces that, but the
 knob resolution is 10-bit, so a wider range just quantises.
@@ -154,7 +154,7 @@ knob resolution is 10-bit, so a wider range just quantises.
   alongside `-nostartfiles`. Leave it off.
 - **`Processor::pitchBend` takes a `uint8_t`** in the SDK's `processor.h`,
   while the runtime calls `unit_pitch_bend` with a 14-bit `uint16_t`. Inherit
-  it blindly and you silently keep only the low 7 bits. `units/poly8/osc.h`
+  it blindly and you silently keep only the low 7 bits. `units/osc/poly8/osc.h`
   declares its own `pitchBend(uint16_t)` overload to avoid this.
 - **Note delivery depends on a global setting.** With `EG Legato = On` (the
   factory default) the runtime calls `unit_note_on` once per *phrase*, not once

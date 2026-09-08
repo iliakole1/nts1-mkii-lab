@@ -78,7 +78,7 @@ def lint_casio_pins(root):
     kFlute compiles, links, loads, and quietly ships a second flute.
     """
     errors = []
-    pattern = os.path.join(root, "units", "casio", "*", "dsp.h")
+    pattern = os.path.join(root, "units", "osc", "casio", "*", "dsp.h")
     pins = {}
     for path in sorted(glob.glob(pattern)):
         name = os.path.basename(os.path.dirname(path))
@@ -86,14 +86,14 @@ def lint_casio_pins(root):
             source = f.read()
         found = re.search(r"Pt20Engine::init\(Pt20Engine::(k\w+)\)", source)
         if not found:
-            errors.append(f"casio/{name}: no Pt20Engine::init(Pt20Engine::k...) call")
+            errors.append(f"osc/casio/{name}: no Pt20Engine::init(Pt20Engine::k...) call")
             continue
         pinned = found.group(1)
         expected = "k" + name.capitalize()
         if pinned != expected:
-            errors.append(f"casio/{name}: pins {pinned}, expected {expected}")
+            errors.append(f"osc/casio/{name}: pins {pinned}, expected {expected}")
         if pinned in pins:
-            errors.append(f"casio/{name}: pins {pinned}, already used by casio/{pins[pinned]}")
+            errors.append(f"osc/casio/{name}: pins {pinned}, already used by casio/{pins[pinned]}")
         pins[pinned] = name
     return errors
 
@@ -101,8 +101,8 @@ def lint_casio_pins(root):
 def main():
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     headers = sorted(
-        glob.glob(os.path.join(root, "units", "*", "header.c"))
-        + glob.glob(os.path.join(root, "units", "*", "*", "header.c"))
+        glob.glob(os.path.join(root, "units", "*", "*", "header.c"))
+        + glob.glob(os.path.join(root, "units", "*", "*", "*", "header.c"))
     )
     if not headers:
         print("no unit headers found")
@@ -113,11 +113,11 @@ def main():
     casio_errors = lint_casio_pins(root)
     if casio_errors:
         failed += 1
-        print("  [FAIL] units/casio/*/dsp.h tone pinning")
+        print("  [FAIL] units/osc/casio/*/dsp.h tone pinning")
         for e in casio_errors:
             print(f"         {e}")
-    elif glob.glob(os.path.join(root, "units", "casio", "*", "dsp.h")):
-        print("  [PASS] units/casio/*/dsp.h tone pinning")
+    elif glob.glob(os.path.join(root, "units", "osc", "casio", "*", "dsp.h")):
+        print("  [PASS] units/osc/casio/*/dsp.h tone pinning")
 
     for path in headers:
         rel = os.path.relpath(path, root)

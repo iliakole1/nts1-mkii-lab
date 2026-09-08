@@ -17,15 +17,15 @@
 #include <string>
 #include <vector>
 
-#include "../units/ensemble/dsp.h"
-#include "../units/poly8/dsp.h"
-#include "../units/epiano/dsp.h"
-#include "../units/organ/dsp.h"
-#include "../units/drive/dsp.h"
-#include "../units/flute/dsp.h"
-#include "../units/piano/dsp.h"
-#include "../units/pluck/dsp.h"
-#include "../units/shimmer/dsp.h"
+#include "../units/modfx/ensemble/dsp.h"
+#include "../units/osc/poly8/dsp.h"
+#include "../units/osc/epiano/dsp.h"
+#include "../units/osc/organ/dsp.h"
+#include "../units/modfx/drive/dsp.h"
+#include "../units/osc/flute/dsp.h"
+#include "../units/osc/piano/dsp.h"
+#include "../units/osc/pluck/dsp.h"
+#include "../units/revfx/shimmer/dsp.h"
 
 /*
  * The seven Casio units each declare their own CasioEngine pinning one tone,
@@ -34,13 +34,13 @@
  * these tests drive. `make lint` checks that each unit pins the tone its
  * directory is named after.
  */
-#include "../units/casio/pt20.h"
-#include "../units/dx/dsp.h"
-#include "../units/cz/dsp.h"
-#include "../units/wt/dsp.h"
-#include "../units/bbd/dsp.h"
-#include "../units/reso/dsp.h"
-#include "../units/micro/dsp.h"
+#include "../units/osc/casio/pt20.h"
+#include "../units/osc/dx/dsp.h"
+#include "../units/osc/cz/dsp.h"
+#include "../units/osc/wt/dsp.h"
+#include "../units/delfx/bbd/dsp.h"
+#include "../units/delfx/reso/dsp.h"
+#include "../units/modfx/micro/dsp.h"
 
 /*
  * WtEngine takes its wave bank from the caller so the 16 KB lands in .bss
@@ -62,7 +62,7 @@ struct WtHarness : WtEngine {
 /*
  * PluckEngine takes its delay-line storage from the caller so that the 24 KB
  * of lines land in .bss rather than being baked into the shipped ELF (see
- * units/pluck/osc.h). The generic checks below all call init() with no
+ * units/osc/pluck/osc.h). The generic checks below all call init() with no
  * arguments, and several of them compare two live engines, so each one needs
  * storage of its own.
  */
