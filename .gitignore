@@ -1,0 +1,13 @@
+# build output
+build/
+sim/
+dist/
+*.nts1mkiiunit
+*.wav
+
+# tooling
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
