@@ -36,6 +36,7 @@
  */
 #include "../units/casio/pt20.h"
 #include "../units/dx/dsp.h"
+#include "../units/cz/dsp.h"
 
 /*
  * PluckEngine takes its delay-line storage from the caller so that the 24 KB
@@ -1665,6 +1666,239 @@ void renderDxDemo() {
   writeWav("dist/test/dx.wav", mono, 1);
 }
 
+
+// ---------------------------------------------------------------------------
+// cz — phase distortion.
+
+static const char *const kCzNames[CzEngine::kNumPresets] = {
+    "RESO", "BRAS", "EPNO", "BASS", "BELL", "STRG", "PIPE", "VOX"};
+
+void testCz() {
+  checkPresetsInTune<CzEngine>("cz", kCzNames, CzEngine::kNumPresets);
+  checkPresetsDiffer<CzEngine>("cz", kCzNames, CzEngine::kNumPresets, 1.8f, 2.0f);
+  checkDecays<CzEngine>("cz", CzEngine::kEPiano);
+  checkEnvelopeStretch<CzEngine>("cz", CzEngine::kEPiano);
+
+  printf("\ncz: distortion\n");
+
+  /* DCW is the filter knob on a synth with no filter. */
+  {
+    auto centroid = [](int32_t dcw) {
+      CzEngine e;
+      e.init();
+      e.setParam(CzEngine::P_PRESET, CzEngine::kReso);
+      e.setParam(CzEngine::P_DCW, dcw);
+      e.noteOn(60, 100);
+      auto buf = renderVoice(e, kSR / 2);
+      return fingerprint(buf, dsp::noteToHz(60)).centroidHz;
+    };
+    const float shut = centroid(0), open = centroid(1023);
+    printf("  RESO centroid: %.0f Hz at DCW 0, %.0f Hz at DCW max\n", shut, open);
+    check(open > shut * 2.f, "cz DCW opens the spectrum");
+  }
+
+  /* At DCW 0 the morphing shapes are undistorted cosines, so a preset built
+   * from them has to collapse to something close to a sine. */
+  {
+    CzEngine e;
+    e.init();
+    e.setParam(CzEngine::P_PRESET, CzEngine::kEPiano);
+    e.setParam(CzEngine::P_DCW, 0);
+    e.noteOn(69, 100);
+    auto buf = renderVoice(e, kSR / 4);
+    const double f0 = dsp::noteToHz(69);
+    const double fund = energyAt(buf, kSR / 32, 8192, f0);
+    double upper = 0.0;
+    for (int n = 3; n <= 9; ++n) upper += energyAt(buf, kSR / 32, 8192, f0 * n);
+    printf("  EPNO at DCW 0: fundamental %.5f, harmonics 3-9 %.5f\n", fund, upper);
+    check(fund > upper * 6.0, "cz collapses toward cosines at DCW 0");
+  }
+
+  /*
+   * Every shape has to be a plain cosine when the sweep is shut, and none of
+   * them may contain a step: a discontinuity inside the cycle is a click at
+   * the fundamental on every period, which is the classic way to get a phase
+   * distortion oscillator sounding harsh for no musical reason.
+   */
+  {
+    CzEngine probe;
+    probe.init();
+    float worstDev = 0.f, worstStep = 0.f;
+    for (int w = 0; w < CzEngine::kNumWaves; ++w) {
+      /* The resonant three are a windowed harmonic, not a warped cosine, so
+       * only the five morphing shapes are held to the cosine. */
+      float prev = probe.probeShape(w, 0.f, 0.f, 1000.f);
+      for (int i = 1; i <= 4000; ++i) {
+        const float ph = i / 4000.f;
+        const float got = probe.probeShape(w, ph, 0.f, 1000.f);
+        if (w < CzEngine::kResoSaw)
+          worstDev = fmaxf(worstDev, fabsf(got - cosf(2.f * dsp::kPi * ph)));
+        worstStep = fmaxf(worstStep, fabsf(got - prev));
+        prev = got;
+      }
+    }
+    printf("  at DCW 0: %.5f from a cosine, largest step %.5f\n", worstDev, worstStep);
+    check(worstDev < 0.005f, "cz morphing shapes are plain cosines at DCW 0");
+    check(worstStep < 0.02f, "cz shapes have no discontinuity inside the cycle");
+  }
+
+  /*
+   * The resonant peak climbs with the sweep and must stop before it runs off
+   * the top of the band. Folding is what to look for, and folded products land
+   * off the note's harmonic grid — so measure on-grid against the same grid
+   * pushed 70 cents sharp, the way the preset tuning check does. Detune and
+   * LFO off, or the patch's own movement shows up as off-grid energy.
+   */
+  {
+    auto offGrid = [](uint8_t note) {
+      CzEngine e;
+      e.init();
+      e.setParam(CzEngine::P_PRESET, CzEngine::kReso);
+      e.setParam(CzEngine::P_DCW, 1023);
+      e.setParam(CzEngine::P_DETUNE, 0);
+      e.setParam(CzEngine::P_LFO, 0);
+      e.noteOn(note, 127);
+      auto buf = renderVoice(e, kSR / 2);
+      const double f0 = dsp::noteToHz(note);
+      double on = 0.0, off = 0.0;
+      for (int n = 1; n <= 40; ++n) {
+        const double hz = f0 * n;
+        if (hz > 0.45 * kSR) break;
+        on += energyAt(buf, kSR / 16, 8192, hz);
+        off += energyAt(buf, kSR / 16, 8192, hz * 1.0413);
+      }
+      return std::make_pair(static_cast<float>(off / fmax(on, 1e-9)), analyse(buf).peak);
+    };
+    const auto low = offGrid(36);
+    const auto high = offGrid(103);
+    printf("  RESO off-grid share: %.4f at C2, %.4f at G7 (peaks %.3f / %.3f)\n",
+           low.first, high.first, low.second, high.second);
+    check(low.first < 0.30f, "cz sweep stays on the harmonic grid low down");
+    check(high.first < 0.30f, "cz caps the resonant peak at the top of the keyboard");
+    check(high.second <= 1.0001f, "cz stays in range at the top of the keyboard");
+  }
+
+  /* Every one of the eight shapes has to be finite and bounded across a full
+   * sweep, including the corners of the distortion functions. */
+  {
+    bool ok = true;
+    float worst = 0.f;
+    for (int w = 0; w < CzEngine::kNumWaves; ++w) {
+      for (int step = 0; step <= 20; ++step) {
+        CzEngine e;
+        e.init();
+        /* Drive every preset's sweep to this point and check the output. The
+         * shapes are exercised through the presets that use them. */
+        e.setParam(CzEngine::P_PRESET, w % CzEngine::kNumPresets);
+        e.setParam(CzEngine::P_DCW, step * 1023 / 20);
+        e.noteOn(static_cast<uint8_t>(48 + w * 4), 120);
+        auto buf = renderVoice(e, kSR / 20);
+        const Stats st = analyse(buf);
+        worst = fmaxf(worst, st.peak);
+        if (!st.finite || st.peak > 1.0001f) ok = false;
+      }
+    }
+    printf("  worst peak across every shape and sweep position: %.3f\n", worst);
+    check(ok, "cz stays finite and in range across the whole sweep");
+  }
+
+  printf("\ncz: voices\n");
+  {
+    CzEngine e;
+    e.init();
+    e.setParam(CzEngine::P_PRESET, CzEngine::kStrings);
+    for (int n = 0; n < 8; ++n) e.noteOn(static_cast<uint8_t>(48 + n * 2), 100);
+    renderVoice(e, kBlock * 8);
+    check(e.activeVoices() == 8, "cz 8 held notes light up 8 voices");
+
+    for (int n = 0; n < 4; ++n) e.noteOn(static_cast<uint8_t>(72 + n), 100);
+    auto stolen = renderVoice(e, kSR / 4);
+    check(analyse(stolen).finite, "cz over-allocating stays finite");
+    check(e.activeVoices() == 8, "cz voice count stays capped at 8");
+
+    e.allNoteOff();
+    renderVoice(e, kSR * 2);
+    check(e.activeVoices() == 0, "cz returns every voice to the pool");
+  }
+
+  /*
+   * OCT has to move by whole octaves. Measured by period rather than by
+   * comparing two bins: several of these patches carry a line an octave above
+   * the note, so "more energy at f0 than at 2*f0" is not true even when the
+   * transpose is perfect.
+   */
+  {
+    /*
+     * Against the octave below, which for a signal periodic at f0 has to be
+     * empty. Not autocorrelation: PIPE is dead flat, so every multiple of the
+     * true period correlates equally well and the estimate lands on whichever
+     * one float noise favours. Not a bin ratio against 2*f0 either, since
+     * several patches carry a line up there on purpose.
+     */
+    auto fundamentalVsOctaveBelow = [](int32_t oct, double expected) {
+      CzEngine e;
+      e.init();
+      e.setParam(CzEngine::P_PRESET, CzEngine::kReso);
+      e.setParam(CzEngine::P_OCTAVE, oct);
+      e.setParam(CzEngine::P_DETUNE, 0);
+      e.setParam(CzEngine::P_LFO, 0);
+      e.noteOn(69, 100);  // A4 = 440
+      auto buf = renderVoice(e, kSR / 3);
+      const double at = energyAt(buf, kSR / 16, 8192, expected);
+      const double below = energyAt(buf, kSR / 16, 8192, expected * 0.5);
+      return static_cast<float>(at / fmax(below, 1e-9));
+    };
+    const float mid = fundamentalVsOctaveBelow(0, 440.0);
+    const float down = fundamentalVsOctaveBelow(-1, 220.0);
+    const float up = fundamentalVsOctaveBelow(1, 880.0);
+    printf("  fundamental vs the octave below it: %.1fx at OCT 0, %.1fx down, %.1fx up\n",
+           mid, down, up);
+    /*
+     * The ceiling here is the analysis, not the signal: the subharmonic bin
+     * only ever holds leakage from the fundamental, and a fixed 8192-sample
+     * window holds fewer cycles the lower the note, so the ratio climbs with
+     * pitch even though all three are equally clean. A transpose that did
+     * nothing would score below 1, so a threshold of 5 discriminates with
+     * room to spare.
+     */
+    check(mid > 5.f, "cz plays A4 at 440 Hz");
+    check(down > 5.f, "cz OCT -1 sounds an octave down");
+    check(up > 5.f, "cz OCT +1 sounds an octave up");
+  }
+
+  {
+    CzEngine e;
+    e.init();
+    auto buf = renderVoice(e, kSR / 10);
+    check(analyse(buf).peak == 0.f, "cz is silent with no notes held");
+  }
+}
+
+void renderCzDemo() {
+  printf("\ncz demo\n");
+  const uint8_t chords[4][3] = {{60, 64, 67}, {57, 60, 64}, {53, 57, 60}, {55, 59, 62}};
+
+  std::vector<float> mono;
+  for (int preset = 0; preset < CzEngine::kNumPresets; ++preset) {
+    CzEngine e;
+    e.init();
+    e.setParam(CzEngine::P_PRESET, preset);
+    for (int c = 0; c < 2; ++c) {
+      for (int n = 0; n < 3; ++n)
+        e.noteOn(chords[c][n], static_cast<uint8_t>(105 - n * 10));
+      auto held = renderVoice(e, kSR * 3 / 4);
+      mono.insert(mono.end(), held.begin(), held.end());
+      for (int n = 0; n < 3; ++n) e.noteOff(chords[c][n]);
+      auto gap = renderVoice(e, kSR / 2);
+      mono.insert(mono.end(), gap.begin(), gap.end());
+    }
+  }
+  const Stats s = analyse(mono);
+  printf("  cz demo: peak %.3f  rms %.3f\n", s.peak, s.rms);
+  check(s.finite && s.peak <= 1.0001f, "cz demo stays in range");
+  writeWav("dist/test/cz.wav", mono, 1);
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -1681,11 +1915,13 @@ int main() {
   testCasioArticulation();
   testCasioBehaviour();
   testDx();
+  testCz();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();
   renderCasioDemo();
   renderDxDemo();
+  renderCzDemo();
   printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILURES", g_failures,
          g_failures == 1 ? "" : "s");
   return g_failures == 0 ? 0 : 1;

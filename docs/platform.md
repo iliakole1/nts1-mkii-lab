@@ -48,6 +48,7 @@ build):
 | `shimmer` | revfx | 7.4 KB | 0.7 KB | — |
 | `casio-*` | osc | 15.0 KB | 1.1 KB | — |
 | `dx` | osc | 17.9 KB | 3.9 KB | — |
+| `cz` | osc | 17.6 KB | 3.4 KB | — |
 
 The seven `casio-*` units are identical in size: they share one engine and
 differ only in the tone constant each pins.
