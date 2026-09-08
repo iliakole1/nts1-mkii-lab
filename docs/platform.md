@@ -45,6 +45,7 @@ build):
 | `pluck` | osc | 14.7 KB | 1.0 KB | 24.0 KB |
 | `ensemble` | modfx | 5.7 KB | 0.4 KB | — |
 | `drive` | modfx | 5.9 KB | 0.4 KB | — |
+| `micro` | modfx | 6.4 KB | 0.5 KB | — |
 | `bbd` | delfx | 8.7 KB | 0.6 KB | — |
 | `reso` | delfx | 6.8 KB | 0.5 KB | — |
 | `shimmer` | revfx | 7.4 KB | 0.7 KB | — |

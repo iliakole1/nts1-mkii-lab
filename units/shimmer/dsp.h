@@ -17,6 +17,7 @@
 #pragma once
 
 #include "dsp_util.h"
+#include "shifter.h"
 
 class ShimmerEngine {
  public:
@@ -84,7 +85,7 @@ class ShimmerEngine {
     }
     preLine_ = p;
     p += kPreDelayMax;
-    shiftLine_ = p;
+    shifter_.init(p, kShiftSize, kWindow);
 
     reset();
 
@@ -108,11 +109,8 @@ class ShimmerEngine {
     }
     if (preLine_)
       for (int i = 0; i < kPreDelayMax; ++i) preLine_[i] = 0.f;
-    if (shiftLine_)
-      for (int i = 0; i < kShiftSize; ++i) shiftLine_[i] = 0.f;
+    shifter_.reset();
     preWrite_ = 0;
-    shiftWrite_ = 0;
-    shiftPhase_ = 0.f;
     hpL_ = hpR_ = 0.f;
     shiftLp_ = 0.f;
     shiftIn_ = 0.f;
@@ -186,7 +184,7 @@ class ShimmerEngine {
       if (++preWrite_ >= kPreDelayMax) preWrite_ = 0;
 
       /* Previous tail, pitch-shifted, is what makes it shimmer. */
-      const float shifted = shiftRead(ratio);
+      const float shifted = shifter_.read(ratio);
       shiftLp_ += (shifted - shiftLp_) * 0.5f;  // tame the top before re-entry
       const float regen = dsp::softclipf(shiftLp_ * shimmer);
 
@@ -220,8 +218,7 @@ class ShimmerEngine {
        */
       const float tailMono = (tailL + tailR) * 0.5f;
       shiftIn_ += (tailMono - shiftIn_) * 0.45f;
-      shiftLine_[shiftWrite_] = shiftIn_;
-      shiftWrite_ = (shiftWrite_ + 1) & kShiftMask;
+      shifter_.write(shiftIn_);
 
       out[n * 2] = dsp::softclipf(inL * dry + tailL * wet);
       out[n * 2 + 1] = dsp::softclipf(inR * dry + tailR * wet);
@@ -298,67 +295,12 @@ class ShimmerEngine {
     return dsp::lerpf(line[i0], line[i1], frac);
   }
 
-  /*
-   * One head does the resampling; the second exists only to hide the splice.
-   *
-   * The obvious two-head design — heads locked half a window apart, both
-   * audible the whole time, crossfaded triangularly — sounds detuned on
-   * anything sustained, and the reason is worth writing down. Both heads
-   * resample the same source at the same ratio, so they emit the *same*
-   * frequency; their delays differ by a constant W/2, so their phase
-   * difference is a constant 2*pi*f*(W/2)/SR. That is a fixed comb across the
-   * spectrum with a notch every 2*SR/W Hz — 8 Hz apart at this window length.
-   * Sustained notes get shredded into a detuned scatter, which is exactly what
-   * it sounds like.
-   *
-   * So: head A sweeps the full window alone, and only in the last 12% does head
-   * B — a whole window behind, i.e. sitting where A is about to jump back to —
-   * fade in to cover the wrap. Interference exists only during that splice, and
-   * an equal-power crossfade is right there because the two are reading
-   * genuinely different content.
-   *
-   * Shifting down sweeps the delay outward from W to 2W instead, so the splice
-   * head never has to read samples that have not been written yet.
-   */
-  static constexpr float kFade = 0.12f;
-
-  inline float shiftRead(float ratio) {
-    const float span = fabsf(ratio - 1.f);
-    if (span < 1e-6f) return shiftReadAt(kWindow);  // unity: nothing to do
-
-    /* |increment| < 1, so a compare beats floorf() — a libm call on this FPU. */
-    shiftPhase_ += span / static_cast<float>(kWindow);
-    if (shiftPhase_ >= 1.f) shiftPhase_ -= 1.f;
-
-    const float q = shiftPhase_;  // 0 -> 1 across one grain
-    const bool up = (ratio > 1.f);
-    const float dA = up ? (1.f - q) * kWindow : (1.f + q) * kWindow;
-    const float a = shiftReadAt(dA);
-
-    if (q < 1.f - kFade) return a;
-
-    const float x = (q - (1.f - kFade)) / kFade;  // 0..1 over the splice
-    const float dB = up ? dA + kWindow : dA - kWindow;
-    return sqrtf(1.f - x) * a + sqrtf(x) * shiftReadAt(dB);
-  }
-
-  inline float shiftReadAt(float delay) const {
-    float pos = static_cast<float>(shiftWrite_) - delay;
-    if (pos < 0.f) pos += static_cast<float>(kShiftSize);
-    const int i0 = static_cast<int>(pos);
-    const float frac = pos - static_cast<float>(i0);
-    return dsp::lerpf(shiftLine_[i0 & kShiftMask], shiftLine_[(i0 + 1) & kShiftMask],
-                      frac);
-  }
-
   Comb combL_[kNumCombs], combR_[kNumCombs];
   Allpass apL_[kNumAllpass], apR_[kNumAllpass];
 
   float *preLine_ = nullptr;
-  float *shiftLine_ = nullptr;
+  dsp::Shifter shifter_;
   int preWrite_ = 0;
-  int shiftWrite_ = 0;
-  float shiftPhase_ = 0.f;
   float shiftLp_ = 0.f;
   float shiftIn_ = 0.f;
 

@@ -40,6 +40,7 @@
 #include "../units/wt/dsp.h"
 #include "../units/bbd/dsp.h"
 #include "../units/reso/dsp.h"
+#include "../units/micro/dsp.h"
 
 /*
  * WtEngine takes its wave bank from the caller so the 16 KB lands in .bss
@@ -2514,6 +2515,115 @@ void renderDelayDemos() {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// micro — micro pitch shifting.
+
+void testMicro() {
+  printf("\nmicro: detune and width\n");
+  std::vector<float> ram(MicroEngine::kBufferSize, 0.f);
+
+  {
+    MicroEngine fx;
+    fx.init(ram.data());
+    fx.setParam(MicroEngine::P_MIX, 0);
+    auto in = toStereo(sineBurst(440.0, kSR / 4, 1000));
+    auto out = runFx(fx, in);
+    float dev = 0.f;
+    for (size_t i = 0; i < in.size(); ++i) dev = fmaxf(dev, fabsf(in[i] - out[i]));
+    printf("  dry-path max deviation at MIX 0: %.6f\n", dev);
+    check(dev < 0.01f, "micro MIX 0 passes the input through");
+  }
+
+  /*
+   * The claim is two different pitches, one per ear. Feed a steady tone and
+   * look for energy either side of it — flat on the left, sharp on the right.
+   * A chorus would put the energy back at the source frequency and move it
+   * around instead, which is the difference being tested.
+   */
+  {
+    MicroEngine fx;
+    fx.init(ram.data());
+    fx.setParam(MicroEngine::P_DETUNE, 1023);  // 25 cents in FINE
+    fx.setParam(MicroEngine::P_MODE, MicroEngine::kFine);
+    fx.setParam(MicroEngine::P_MIX, 100);
+    fx.setParam(MicroEngine::P_SPREAD, 100);
+    fx.setParam(MicroEngine::P_FEEDBACK, 0);
+
+    std::vector<float> mono(kSR * 3, 0.f);
+    for (size_t i = 0; i < mono.size(); ++i)
+      mono[i] = 0.35f * sinf(2.f * dsp::kPi * 440.f * i / kSR);
+    auto out = runFx(fx, toStereo(mono));
+
+    std::vector<float> l(out.size() / 2), r(out.size() / 2);
+    for (size_t i = 0; i < l.size(); ++i) {
+      l[i] = out[i * 2];
+      r[i] = out[i * 2 + 1];
+    }
+    /* 25 cents is a ratio of about 1.0145, so 440 becomes 433.7 and 446.4. */
+    const double flat = 440.0 * dsp::centsToRatio(-25.f);
+    const double sharp = 440.0 * dsp::centsToRatio(25.f);
+    const double lFlat = energyAt(l, kSR, 16384, flat);
+    const double lSharp = energyAt(l, kSR, 16384, sharp);
+    const double rFlat = energyAt(r, kSR, 16384, flat);
+    const double rSharp = energyAt(r, kSR, 16384, sharp);
+    printf("  left: flat %.5f sharp %.5f   right: flat %.5f sharp %.5f\n", lFlat, lSharp,
+           rFlat, rSharp);
+    check(lFlat > lSharp * 3.0, "micro pitches the left side down");
+    check(rSharp > rFlat * 3.0, "micro pitches the right side up");
+  }
+
+  /* SPREAD 0 has to be mono-compatible; SPREAD 100 must not be. */
+  {
+    auto sideEnergy = [&ram](int32_t spread) {
+      MicroEngine fx;
+      fx.init(ram.data());
+      fx.setParam(MicroEngine::P_DETUNE, 700);
+      fx.setParam(MicroEngine::P_MIX, 100);
+      fx.setParam(MicroEngine::P_SPREAD, spread);
+      std::vector<float> mono(kSR * 2, 0.f);
+      for (size_t i = 0; i < mono.size(); ++i)
+        mono[i] = 0.35f * sinf(2.f * dsp::kPi * 330.f * i / kSR);
+      auto out = runFx(fx, toStereo(mono));
+      double side = 0.0;
+      const size_t from = out.size() / 4;
+      for (size_t i = from; i < out.size() / 2; ++i) {
+        const float d = out[i * 2] - out[i * 2 + 1];
+        side += static_cast<double>(d) * d;
+      }
+      return sqrt(side / static_cast<double>(out.size() / 2 - from));
+    };
+    const double narrow = sideEnergy(0), wide = sideEnergy(100);
+    printf("  side-channel rms: %.6f at SPRD 0, %.6f at SPRD 100\n", narrow, wide);
+    check(narrow < 1e-5, "micro SPRD 0 collapses to mono");
+    check(wide > narrow * 50.0, "micro SPRD 100 opens the image");
+  }
+
+  /* The modes have to differ, and none of them may run away. */
+  {
+    float peaks[MicroEngine::kNumModes];
+    for (int m = 0; m < MicroEngine::kNumModes; ++m) {
+      MicroEngine fx;
+      fx.init(ram.data());
+      fx.setParam(MicroEngine::P_MODE, m);
+      fx.setParam(MicroEngine::P_MIX, 100);
+      fx.setParam(MicroEngine::P_FEEDBACK, 100);
+      fx.setParam(MicroEngine::P_DETUNE, 1023);
+      auto in = toStereo(sineBurst(220.0, kSR, 2000));
+      std::vector<float> pad(kSR * 4 * 2, 0.f);
+      in.insert(in.end(), pad.begin(), pad.end());
+      auto out = runFx(fx, in);
+      const Stats st = analyse(out);
+      peaks[m] = st.peak;
+      check(st.finite, std::string("micro ") + MicroEngine::modeName(m) + " stays finite");
+      check(st.peak <= 1.0001f,
+            std::string("micro ") + MicroEngine::modeName(m) + " stays in range");
+    }
+    printf("  peak at full feedback: FINE %.3f  WIDE %.3f  SLAP %.3f\n", peaks[0],
+           peaks[1], peaks[2]);
+  }
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -2534,6 +2644,7 @@ int main() {
   testWt();
   testBbd();
   testReso();
+  testMicro();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();

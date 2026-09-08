@@ -1,13 +1,13 @@
 # nts1-mkii-lab
 
-Twenty-one custom oscillators and effects for the **Korg NTS-1 digital kit
+Twenty-two custom oscillators and effects for the **Korg NTS-1 digital kit
 mkII**, built on Korg's [logue SDK](https://github.com/korginc/logue-sdk) v2.
 
 Sixteen polyphonic instruments — a subtractive synth, electric pianos, drawbar
 organs, struck strings, blown flutes, plucked strings, six-operator FM, phase
 distortion, wavetable scanning and the seven Casio PT-20 presets — plus a
-chorus, a distortion, a bucket-brigade delay, a string resonator and a
-pitch-shifted reverb. All free, all GPLv3.
+chorus, a micro pitch shifter, a distortion, a bucket-brigade delay, a string
+resonator and a pitch-shifted reverb. All free, all GPLv3.
 
 The bet this repo makes: the NTS-1 mkII's oscillator runtime is monophonic, but
 its note callbacks are not — so a unit can implement its own voices, envelopes
@@ -27,6 +27,7 @@ and filters and play chords. `poly8` does exactly that.
 | [`cz`](units/cz) | OSC | Phase distortion, shown as `PD8`. Eight presets — a resonant filter sweep on a synth with no filter, the way the Casio CZ line did it. Cheapest oscillator here. |
 | [`dx`](units/dx) | OSC | Six-operator FM, shown as `FM6`. Eight presets — bells, marimba, vibes, bass, brass, strings, harpsichord, clavinet. Per-patch routing, operator feedback, and sidebands capped so the top of the keyboard does not fold. |
 | [`ensemble`](units/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
+| [`micro`](units/micro) | MOD FX | Micro pitch shifting. Two shifters a few cents apart, one per side — width with nothing moving, so there is no sweep to get tired of. |
 | [`drive`](units/drive) | MOD FX | Distortion: soft saturation, biased fuzz, wavefolder, bitcrusher. The analogue-ish modes run at 2x oversampling with a halfband decimator. |
 | [`bbd`](units/bbd) | DEL FX | Bucket-brigade delay. Time is clock rate and clock rate is bandwidth, so a long setting is dark because it cannot be anything else. Compander, tape-ish wobble, tempo sync. |
 | [`reso`](units/reso) | DEL FX | Four tuned string resonators — a delay line short enough to be a pitch. Play a drum loop through a minor seventh. |
@@ -109,7 +110,8 @@ seconds, which is where most of the work happens.
 ## Layout
 
 ```
-common/          portable DSP building blocks (BLEP osc, SVF, ADSR, operator EG, LFO, helpers)
+common/          portable DSP building blocks (BLEP osc, SVF, ADSR, operator EG,
+                 pitch shifter, LFO, helpers)
 units/<name>/
   dsp.h          the engine — portable C++, zero SDK includes
   osc.h|modfx.h|revfx.h  logue-sdk Processor adapter
