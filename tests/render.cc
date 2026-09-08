@@ -38,6 +38,8 @@
 #include "../units/dx/dsp.h"
 #include "../units/cz/dsp.h"
 #include "../units/wt/dsp.h"
+#include "../units/bbd/dsp.h"
+#include "../units/reso/dsp.h"
 
 /*
  * WtEngine takes its wave bank from the caller so the 16 KB lands in .bss
@@ -2136,6 +2138,382 @@ void renderWtDemo() {
   writeWav("dist/test/wt.wav", mono, 1);
 }
 
+
+// ---------------------------------------------------------------------------
+// bbd — bucket-brigade delay.
+
+/* Left channel only, deinterleaved. */
+static std::vector<float> leftOf(const std::vector<float> &stereo) {
+  std::vector<float> l(stereo.size() / 2);
+  for (size_t i = 0; i < l.size(); ++i) l[i] = stereo[i * 2];
+  return l;
+}
+
+/* Where the loudest thing after the input lands, in milliseconds. */
+static float firstEchoMs(const std::vector<float> &mono, size_t skip) {
+  float peak = 0.f;
+  size_t at = 0;
+  for (size_t i = skip; i < mono.size(); ++i)
+    if (fabsf(mono[i]) > peak) {
+      peak = fabsf(mono[i]);
+      at = i;
+    }
+  return static_cast<float>(at) * 1000.f / kSR;
+}
+
+void testBbd() {
+  printf("\nbbd: the line\n");
+  std::vector<float> ram(BbdEngine::kBufferSize, 0.f);
+
+  /* MIX 0 has to be a bypass. */
+  {
+    BbdEngine fx;
+    fx.init(ram.data());
+    fx.setParam(BbdEngine::P_MIX, 0);
+    auto in = toStereo(sineBurst(440.0, kSR / 4, 1000));
+    auto out = runFx(fx, in);
+    float dev = 0.f;
+    for (size_t i = 0; i < in.size(); ++i) dev = fmaxf(dev, fabsf(in[i] - out[i]));
+    printf("  dry-path max deviation at MIX 0: %.6f\n", dev);
+    check(dev < 0.01f, "bbd MIX 0 passes the input through");
+  }
+
+  /* An impulse has to come back when asked. */
+  {
+    auto impulseAt = [&ram](int32_t time) {
+      BbdEngine fx;
+      fx.init(ram.data());
+      fx.setParam(BbdEngine::P_TIME, time);
+      fx.setParam(BbdEngine::P_FEEDBACK, 0);
+      fx.setParam(BbdEngine::P_MIX, 100);
+      fx.setParam(BbdEngine::P_MOD, 0);
+      fx.setParam(BbdEngine::P_AGE, 0);
+      fx.setParam(BbdEngine::P_SPREAD, 0);
+      /* The time control glides, so let it arrive before asking where the
+       * echo is — otherwise the blip is smeared across the whole sweep. */
+      std::vector<float> settle(kSR, 0.f);
+      runFx(fx, toStereo(settle));
+      /* Two seconds: the longest setting is 1.2 s and would not fit in one. */
+      std::vector<float> mono(kSR * 2, 0.f);
+      for (int i = 0; i < 64; ++i) mono[i] = 0.8f;  // a short blip, not a click
+      auto out = runFx(fx, toStereo(mono));
+      /* Skip only past the blip itself: the shortest setting puts its
+       * echo at 20 ms, which is inside a longer skip. */
+      return firstEchoMs(leftOf(out), 200);
+    };
+    const float shortMs = impulseAt(0), longMs = impulseAt(1023);
+    printf("  echo lands at %.1f ms at TIME 0 and %.1f ms at TIME max\n", shortMs, longMs);
+    check(shortMs > 15.f && shortMs < 30.f, "bbd short setting delays about 20 ms");
+    check(longMs > 1000.f, "bbd long setting delays over a second");
+  }
+
+  /*
+   * The signature. On a bucket-brigade chain delay time *is* clock rate, and
+   * clock rate is bandwidth — so a long setting is darker than a short one
+   * with nothing else touched. A digital delay does not do this, and it is the
+   * single most identifying thing about the sound.
+   */
+  {
+    auto brightness = [&ram](int32_t time) {
+      BbdEngine fx;
+      fx.init(ram.data());
+      fx.setParam(BbdEngine::P_TIME, time);
+      fx.setParam(BbdEngine::P_FEEDBACK, 0);
+      fx.setParam(BbdEngine::P_MIX, 100);
+      fx.setParam(BbdEngine::P_MOD, 0);
+      fx.setParam(BbdEngine::P_AGE, 100);
+      fx.setParam(BbdEngine::P_TONE, 100);
+      /* Broadband input, so the measurement is of the line and not the source. */
+      dsp::Noise ns;
+      ns.seed(0x1234567U);
+      /* Four seconds of noise, measured at three — well past the longest
+       * setting, so both are reading a line that has filled. Kept quiet so
+       * the output stage stays inside the linear part of its soft clip. */
+      std::vector<float> mono(kSR * 4, 0.f);
+      for (size_t i = 0; i < mono.size(); ++i) mono[i] = ns.next() * 0.15f;
+      auto out = leftOf(runFx(fx, toStereo(mono)));
+
+      /*
+       * Subtract the dry path to leave the line on its own. Measuring the
+       * mixed output instead compares two different comb filters — the dry
+       * signal and its own delayed copy interfere, with notches every 1/delay
+       * Hz — and that swamps the bandwidth difference being looked for.
+       * At MIX 100 the dry gain is 0.5 by construction.
+       */
+      std::vector<float> wetOnly(out.size());
+      for (size_t i = 0; i < out.size(); ++i) wetOnly[i] = out[i] - 0.5f * mono[i];
+
+      /* Energy above 4 kHz against energy below it. */
+      double hi = 0.0, lo = 0.0;
+      for (int k = 0; k < 12; ++k) {
+        lo += energyAt(wetOnly, kSR * 3, 8192, 300.0 + k * 300.0);
+        hi += energyAt(wetOnly, kSR * 3, 8192, 4200.0 + k * 700.0);
+      }
+      return static_cast<float>(hi / fmax(lo, 1e-9));
+    };
+    const float shortB = brightness(120), longB = brightness(1023);
+    printf("  high/low energy ratio: %.4f short, %.4f long\n", shortB, longB);
+    check(shortB > longB * 2.f, "bbd the line gets darker as the delay gets longer");
+  }
+
+  /* AGE 0 is a clean digital delay; AGE 100 is the chain. */
+  {
+    auto render = [&ram](int32_t age) {
+      BbdEngine fx;
+      fx.init(ram.data());
+      fx.setParam(BbdEngine::P_TIME, 500);
+      fx.setParam(BbdEngine::P_FEEDBACK, 40);
+      fx.setParam(BbdEngine::P_MIX, 100);
+      fx.setParam(BbdEngine::P_MOD, 0);
+      fx.setParam(BbdEngine::P_AGE, age);
+      return leftOf(runFx(fx, toStereo(sineBurst(700.0, kSR, 2000))));
+    };
+    auto clean = render(0);
+    auto worn = render(100);
+    float diff = 0.f;
+    for (size_t i = 0; i < clean.size(); ++i) diff = fmaxf(diff, fabsf(clean[i] - worn[i]));
+    printf("  AGE 0 vs 100 max sample difference: %.4f\n", diff);
+    check(diff > 0.02f, "bbd AGE changes the character of the line");
+    check(analyse(worn).finite, "bbd AGE at maximum stays finite");
+  }
+
+  /* Repeats, and a runaway that saturates instead of exploding. */
+  {
+    BbdEngine fx;
+    fx.init(ram.data());
+    fx.setParam(BbdEngine::P_TIME, 300);
+    fx.setParam(BbdEngine::P_FEEDBACK, 100);
+    fx.setParam(BbdEngine::P_MIX, 100);
+    auto in = toStereo(sineBurst(440.0, kSR / 4, 1000));
+    in.resize(kSR * 12, 0.f);
+    auto out = runFx(fx, in);
+    const Stats st = analyse(out);
+    /* Long after the input stopped there must still be something there. */
+    std::vector<float> tail(out.end() - kSR * 2, out.end());
+    printf("  runaway feedback: peak %.3f, tail rms %.4f\n", st.peak, analyse(tail).rms);
+    check(st.finite, "bbd maximum feedback stays finite");
+    check(st.peak <= 1.0001f, "bbd maximum feedback stays in range");
+    check(analyse(tail).rms > 0.005f, "bbd maximum feedback keeps repeating");
+  }
+
+  /* Tempo sync: an eighth note at 120 bpm is 250 ms. */
+  {
+    BbdEngine fx;
+    fx.init(ram.data());
+    fx.setTempo(120.f);
+    fx.setParam(BbdEngine::P_SYNC, BbdEngine::kSync8);
+    fx.setParam(BbdEngine::P_FEEDBACK, 0);
+    fx.setParam(BbdEngine::P_MIX, 100);
+    fx.setParam(BbdEngine::P_MOD, 0);
+    fx.setParam(BbdEngine::P_AGE, 0);
+    fx.setParam(BbdEngine::P_SPREAD, 0);
+    std::vector<float> settle(kSR, 0.f);
+    runFx(fx, toStereo(settle));
+    std::vector<float> mono(kSR, 0.f);
+    for (int i = 0; i < 64; ++i) mono[i] = 0.8f;
+    const float at = firstEchoMs(leftOf(runFx(fx, toStereo(mono))), 200);
+    printf("  1/8 at 120 bpm lands at %.1f ms (250 expected)\n", at);
+    check(fabsf(at - 250.f) < 15.f, "bbd tempo sync places the echo on the beat");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// reso — tuned string resonators.
+
+void testReso() {
+  printf("\nreso: strings\n");
+  std::vector<float> ram(ResoEngine::kBufferSize, 0.f);
+
+  {
+    ResoEngine fx;
+    fx.init(ram.data());
+    fx.setParam(ResoEngine::P_MIX, 0);
+    auto in = toStereo(sineBurst(440.0, kSR / 4, 1000));
+    auto out = runFx(fx, in);
+    float dev = 0.f;
+    for (size_t i = 0; i < in.size(); ++i) dev = fmaxf(dev, fabsf(in[i] - out[i]));
+    printf("  dry-path max deviation at MIX 0: %.6f\n", dev);
+    check(dev < 0.01f, "reso MIX 0 passes the input through");
+  }
+
+  /*
+   * Excited with noise, the strings have to ring at the note they are tuned
+   * to — that is the whole claim. Measured on the tail, after the input has
+   * stopped, so what is left is the resonator and nothing else.
+   */
+  {
+    auto ringPitch = [&ram](int32_t noteKnob, int32_t strings) {
+      ResoEngine fx;
+      fx.init(ram.data());
+      fx.setParam(ResoEngine::P_NOTE, noteKnob);
+      fx.setParam(ResoEngine::P_CHORD, ResoEngine::kUnison);
+      fx.setParam(ResoEngine::P_STRINGS, strings);
+      fx.setParam(ResoEngine::P_DECAY, 95);
+      fx.setParam(ResoEngine::P_DAMP, 90);
+      fx.setParam(ResoEngine::P_MIX, 100);
+      fx.setParam(ResoEngine::P_SPREAD, 0);
+      dsp::Noise ns;
+      ns.seed(0x99AA33U);
+      std::vector<float> mono(kSR * 3, 0.f);
+      for (int i = 0; i < kSR / 8; ++i) mono[i] = ns.next() * 0.5f;
+      auto out = leftOf(runFx(fx, toStereo(mono)));
+      /* Well past the excitation: only the ring is left. */
+      std::vector<float> tail(out.begin() + kSR, out.begin() + kSR * 2);
+      return estimateHz(tail, 1000, kSR / 4);
+    };
+    /* The knob maps 0..1023 onto notes 24..72. */
+    const float expectMid = dsp::noteToHz(24.f + 512.f / 1023.f * 48.f);
+    const float midHz = ringPitch(512, 1);
+    printf("  rings at %.1f Hz, expected %.1f\n", midHz, expectMid);
+    check(fabsf(midHz - expectMid) / expectMid < 0.03f, "reso rings at its middle note");
+  }
+
+  /* A chord has to put energy on more than one note. */
+  {
+    ResoEngine fx;
+    fx.init(ram.data());
+    fx.setParam(ResoEngine::P_NOTE, 512);
+    fx.setParam(ResoEngine::P_CHORD, ResoEngine::kMinor7);
+    fx.setParam(ResoEngine::P_DECAY, 95);
+    fx.setParam(ResoEngine::P_DAMP, 85);
+    fx.setParam(ResoEngine::P_MIX, 100);
+    dsp::Noise ns;
+    ns.seed(0x5150U);
+    std::vector<float> mono(kSR * 3, 0.f);
+    for (int i = 0; i < kSR / 8; ++i) mono[i] = ns.next() * 0.5f;
+    auto out = leftOf(runFx(fx, toStereo(mono)));
+    const float root = 24.f + 512.f / 1023.f * 48.f;
+    const double e0 = energyAt(out, kSR, 16384, dsp::noteToHz(root));
+    const double e3 = energyAt(out, kSR, 16384, dsp::noteToHz(root + 3.f));
+    const double e7 = energyAt(out, kSR, 16384, dsp::noteToHz(root + 7.f));
+    const double off = energyAt(out, kSR, 16384, dsp::noteToHz(root + 5.f));
+    printf("  MIN7 root %.5f, minor third %.5f, fifth %.5f, unplayed fourth %.5f\n", e0,
+           e3, e7, off);
+    check(e3 > off * 2.0 && e7 > off * 2.0, "reso voices the chord it is asked for");
+  }
+
+  /* DECY sets how long they ring. */
+  {
+    auto tailRms = [&ram](int32_t decay) {
+      ResoEngine fx;
+      fx.init(ram.data());
+      fx.setParam(ResoEngine::P_DECAY, decay);
+      fx.setParam(ResoEngine::P_MIX, 100);
+      fx.setParam(ResoEngine::P_DAMP, 85);
+      dsp::Noise ns;
+      ns.seed(0x2468U);
+      std::vector<float> mono(kSR * 3, 0.f);
+      for (int i = 0; i < kSR / 8; ++i) mono[i] = ns.next() * 0.5f;
+      auto out = leftOf(runFx(fx, toStereo(mono)));
+      std::vector<float> tail(out.begin() + kSR * 2, out.end());
+      return analyse(tail).rms;
+    };
+    const float shortR = tailRms(0), longR = tailRms(100);
+    printf("  tail two seconds on: %.5f at DECY 0, %.5f at DECY 100\n", shortR, longR);
+    check(longR > shortR * 5.f, "reso DECY sets how long the strings ring");
+  }
+
+  /*
+   * A resonator will integrate any offset in its input straight into the loop
+   * and then sit on it. Feed it something with a deliberate bias and check
+   * nothing accumulates.
+   */
+  {
+    ResoEngine fx;
+    fx.init(ram.data());
+    fx.setParam(ResoEngine::P_DECAY, 100);
+    fx.setParam(ResoEngine::P_MIX, 100);
+    std::vector<float> mono(kSR * 4, 0.f);
+    for (size_t i = 0; i < mono.size(); ++i)
+      mono[i] = 0.3f + 0.2f * sinf(2.f * dsp::kPi * 300.f * i / kSR);
+    auto out = leftOf(runFx(fx, toStereo(mono)));
+    /*
+     * The dry path carries the input's own offset through by design, so
+     * measure the strings alone. At MIX 100 the dry gain is 0.5.
+     */
+    double mean = 0.0;
+    const size_t from = out.size() / 2;
+    for (size_t i = from; i < out.size(); ++i) mean += out[i] - 0.5f * mono[i];
+    mean /= static_cast<double>(out.size() - from);
+    printf("  mean of the string path on a biased input: %.5f\n", mean);
+    check(fabs(mean) < 0.02, "reso does not accumulate a DC offset");
+    check(analyse(out).finite && analyse(out).peak <= 1.0001f,
+          "reso stays in range on a biased input");
+  }
+}
+
+void renderDelayDemos() {
+  printf("\ndelay demo renders\n");
+
+  /* poly8 through the bucket-brigade line. */
+  {
+    PolyEngine e;
+    e.init();
+    e.setParam(PolyEngine::P_SHAPE, 250);
+    e.setParam(PolyEngine::P_CUTOFF, 640);
+    e.setParam(PolyEngine::P_DECAY, 260);
+    e.setParam(PolyEngine::P_SUSTAIN, 0);
+    e.setParam(PolyEngine::P_RELEASE, 200);
+
+    std::vector<float> mono;
+    const uint8_t notes[8] = {60, 67, 72, 67, 64, 71, 76, 71};
+    for (int i = 0; i < 8; ++i) {
+      e.noteOn(notes[i], 100);
+      auto seg = renderPoly(e, kSR / 4);
+      mono.insert(mono.end(), seg.begin(), seg.end());
+      e.noteOff(notes[i]);
+    }
+    mono.resize(mono.size() + kSR * 4, 0.f);
+
+    std::vector<float> ram(BbdEngine::kBufferSize, 0.f);
+    BbdEngine fx;
+    fx.init(ram.data());
+    fx.setParam(BbdEngine::P_TIME, 420);
+    fx.setParam(BbdEngine::P_FEEDBACK, 62);
+    fx.setParam(BbdEngine::P_MIX, 45);
+    fx.setParam(BbdEngine::P_AGE, 80);
+    fx.setParam(BbdEngine::P_MOD, 35);
+    fx.setParam(BbdEngine::P_SPREAD, 60);
+    auto out = runFx(fx, toStereo(mono));
+    const Stats st = analyse(out);
+    printf("  poly8 -> bbd: peak %.3f  rms %.3f\n", st.peak, st.rms);
+    check(st.finite && st.peak <= 1.0001f, "poly8 into bbd stays in range");
+    writeWav("dist/test/poly8_bbd.wav", out, 2);
+  }
+
+  /* pluck through the resonator: strings exciting strings. */
+  {
+    PluckHarness e;
+    e.init();
+    e.setParam(PluckHarness::P_PRESET, PluckHarness::kBanjo);
+
+    std::vector<float> mono;
+    const uint8_t notes[6] = {72, 76, 79, 76, 72, 67};
+    for (int i = 0; i < 6; ++i) {
+      e.noteOn(notes[i], 105);
+      auto seg = renderVoice(e, kSR / 3);
+      mono.insert(mono.end(), seg.begin(), seg.end());
+      e.noteOff(notes[i]);
+    }
+    mono.resize(mono.size() + kSR * 4, 0.f);
+
+    std::vector<float> ram(ResoEngine::kBufferSize, 0.f);
+    ResoEngine fx;
+    fx.init(ram.data());
+    fx.setParam(ResoEngine::P_NOTE, 430);
+    fx.setParam(ResoEngine::P_CHORD, ResoEngine::kMinor7);
+    fx.setParam(ResoEngine::P_DECAY, 88);
+    fx.setParam(ResoEngine::P_DAMP, 70);
+    fx.setParam(ResoEngine::P_MIX, 60);
+    fx.setParam(ResoEngine::P_SPREAD, 85);
+    auto out = runFx(fx, toStereo(mono));
+    const Stats st = analyse(out);
+    printf("  pluck -> reso: peak %.3f  rms %.3f\n", st.peak, st.rms);
+    check(st.finite && st.peak <= 1.0001f, "pluck into reso stays in range");
+    writeWav("dist/test/pluck_reso.wav", out, 2);
+  }
+}
+
 int main() {
   printf("nts1-mkii-lab offline render tests\n");
   testTuning();
@@ -2154,6 +2532,8 @@ int main() {
   testDx();
   testCz();
   testWt();
+  testBbd();
+  testReso();
   renderDemo();
   renderPresetDemos();
   renderFxDemos();
@@ -2161,6 +2541,7 @@ int main() {
   renderDxDemo();
   renderCzDemo();
   renderWtDemo();
+  renderDelayDemos();
   printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILURES", g_failures,
          g_failures == 1 ? "" : "s");
   return g_failures == 0 ? 0 : 1;

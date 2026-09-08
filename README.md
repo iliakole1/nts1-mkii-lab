@@ -1,12 +1,13 @@
 # nts1-mkii-lab
 
-Nineteen custom oscillators and effects for the **Korg NTS-1 digital kit
+Twenty-one custom oscillators and effects for the **Korg NTS-1 digital kit
 mkII**, built on Korg's [logue SDK](https://github.com/korginc/logue-sdk) v2.
 
 Sixteen polyphonic instruments — a subtractive synth, electric pianos, drawbar
 organs, struck strings, blown flutes, plucked strings, six-operator FM, phase
 distortion, wavetable scanning and the seven Casio PT-20 presets — plus a
-chorus, a distortion and a pitch-shifted reverb. All free, all GPLv3.
+chorus, a distortion, a bucket-brigade delay, a string resonator and a
+pitch-shifted reverb. All free, all GPLv3.
 
 The bet this repo makes: the NTS-1 mkII's oscillator runtime is monophonic, but
 its note callbacks are not — so a unit can implement its own voices, envelopes
@@ -27,6 +28,8 @@ and filters and play chords. `poly8` does exactly that.
 | [`dx`](units/dx) | OSC | Six-operator FM, shown as `FM6`. Eight presets — bells, marimba, vibes, bass, brass, strings, harpsichord, clavinet. Per-patch routing, operator feedback, and sidebands capped so the top of the keyboard does not fold. |
 | [`ensemble`](units/ensemble) | MOD FX | Stereo chorus/ensemble. Three LFO-modulated delay taps with counter-phase stereo spread, three modes, wet-path tone control. Pairs with `poly8`, which is mono by construction. |
 | [`drive`](units/drive) | MOD FX | Distortion: soft saturation, biased fuzz, wavefolder, bitcrusher. The analogue-ish modes run at 2x oversampling with a halfband decimator. |
+| [`bbd`](units/bbd) | DEL FX | Bucket-brigade delay. Time is clock rate and clock rate is bandwidth, so a long setting is dark because it cannot be anything else. Compander, tape-ish wobble, tempo sync. |
+| [`reso`](units/reso) | DEL FX | Four tuned string resonators — a delay line short enough to be a pitch. Play a drum loop through a minor seventh. |
 | [`shimmer`](units/shimmer) | REVERB | Pitch-shifted reverb. A comb/allpass tank with an octave-up shifter in its feedback path, so the tail climbs away from the source. |
 
 ### [`casio`](units/casio) — the seven PT-20 tones
